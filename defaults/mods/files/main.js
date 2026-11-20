@@ -189,6 +189,8 @@ export default class Files extends View {
         .when(Boolean(this.file), el => el.child(div().id("files-back").w(20).cursor_pointer().text_color(t.muted).on_click((_e, cx) => { this.show(null); cx.notify(); }).child("←")))
         .child(div().font_semibold().child("Files"))
         .child(div().flex_1().min_w(0).truncate().text_right().text_size(12).text_color(t.dim).child(this.file ?? this.root?.split(/[\\/]/).pop() ?? ""))
+        .when(this.markdown != null && !this.on && Boolean(this.root && this.file), el => el.child(div().id("files-markdown-open").flex_none().cursor_pointer().text_size(12).text_color(t.muted).hover(s => s.text_color(t.foreground))
+          .on_click(() => run("browser.markdown", { path: `${this.root}/${this.file}` })).child("Open")))
         .when(this.markdown != null, el => el.child(div().id("files-markdown-source").flex_none().cursor_pointer().text_size(12).text_color(t.muted).hover(s => s.text_color(t.foreground))
           .on_click((_e, cx) => { this.source = !this.source; cx.notify(); }).child(this.source ? "Rendered" : "Source"))))
       .when(!this.file, el => el.child(v_flex().id("files-tree").flex_1().min_h(0).overflow_y_scrollbar().p(6).children(this.rows("", 0, [], t))

@@ -1179,6 +1179,8 @@ tab, and adding Shift opens it beside that pane.
 `browser.open {url?, space?, name?, place?: "tab" | "right" | "down", pane?, profile?: "person" | "agent"}`
 opens a native Chromium/CEF browser (`browser.split {direction?: "right" | "down", url?, pane?, profile?}`
 splits one beside the focused pane, or `pane`; Cmd+Shift+B or Cmd+Ctrl+B and the + menu's "Browser beside" use it), using the existing `native-browser` mod-pane identity.
+`browser.markdown {path, space?, name?, place?: "tab" | "right" | "down", pane?, profile?: "person" | "agent"}`
+opens a local Markdown file or folder on a token-gated loopback preview server with live reload, TOC, syntax highlighting, GitHub alerts, and interactive Mermaid diagrams (Cmd-click on a `.md` link in a terminal opens a tab; Shift+Cmd-click splits it beside that pane).
 The + menu's Browser item uses it. It runs on this Mac even in a remote space.
 `browser.navigate {url, pane?}`, `browser.back {pane?}`, `browser.forward {pane?}`,
 `browser.reload {pane?}`, `browser.focus_url {pane?}`, `browser.devtools {pane?}`

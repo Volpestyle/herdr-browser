@@ -41,7 +41,7 @@ FEATURE_PATHS = ['Cargo.toml', 'src/main.rs', 'src/window.rs', 'src/commands.rs'
                  'src/browser.rs', 'src/browser', 'src/control.rs', 'src/terminal.rs', 'src/vt.rs', 'src/hc.rs', 'src/SKILL.md', 'defaults/AGENTS.md',
                  'defaults/mods/new-menu', 'defaults/mods/native-browser', 'defaults/mods/files', 'defaults/mods/spaces',
                  'defaults/keys.macos.json',
-                 'licenses/CEF.txt', 'licenses/inventory.json']
+                 'licenses/CEF.txt', 'licenses/marked.txt', 'licenses/inventory.json']
 # Stock CEF has no H.264/AAC. This archive is the framework rebuilt on James's
 # personal Mac with proprietary codecs; nothing fetches, uploads or hosts it.
 # Each of his Macs archives that one framework itself, so each has its own digest.

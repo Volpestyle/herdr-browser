@@ -205,6 +205,13 @@
       "files": [
         "licenses/CEF.txt"
       ]
+    },
+    {
+      "name": "Marked (embedded Markdown parser for native Markdown preview)",
+      "source": "https://github.com/markedjs/marked",
+      "files": [
+        "licenses/marked.txt"
+      ]
     }
   ]
 }

@@ -113,8 +113,17 @@ def main():
         command('browser.navigate', pane=pane, url=url + '/one.html')
         until(lambda: inspected().get('title') == 'one.html / JavaScript ready', 'page after download')
         command('browser.focus_url', pane=pane)
+        md_file = pages / 'notes.md'
+        md_file.write_text('# Built-in Markdown\n\n> [!WARNING]\n> Initial warning text.\n')
+        md_browser = command('browser.markdown', profile='agent', path=str(md_file))
+        md_pane = md_browser['pane']
+        until(lambda: (x := command('browser.inspect', pane=md_pane)).get('title') == 'notes.md' and not x.get('loading'), 'markdown viewer page')
+        command('browser.wait', pane=md_pane, text='Initial warning text', timeout=10000)
+        md_file.write_text('# Built-in Markdown\n\nLive reload confirmed.\n')
+        command('browser.wait', pane=md_pane, text='Live reload confirmed', timeout=10000)
+        command('pane.close', pane=md_pane)
         report = {'ok': True, 'home': str(home), 'session': env['HC_SESSION'], 'browser': browser,
-                  'inspection': inspected(), 'user_agent': getattr(server, 'user_agent', None), 'checks': ['page load', 'JavaScript', 'back/forward', 'tab next/prev', 'split bounds', 'dialog hide/show', 'toast clip', 'native download', 'address focus']}
+                  'inspection': inspected(), 'user_agent': getattr(server, 'user_agent', None), 'checks': ['page load', 'JavaScript', 'back/forward', 'tab next/prev', 'split bounds', 'dialog hide/show', 'toast clip', 'native download', 'address focus', 'markdown viewer', 'markdown live reload']}
         (work / 'result.json').write_text(json.dumps(report, indent=2) + '\n')
         print(json.dumps(report, indent=2), flush=True)
         if args.keep:

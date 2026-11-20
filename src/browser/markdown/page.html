@@ -1,0 +1,1437 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>{{TITLE}}</title>
+<script>
+try {
+  var t = localStorage.getItem('md-preview.theme')
+  var dark = t === 'dark' || ((!t || t === 'auto') && matchMedia('(prefers-color-scheme: dark)').matches)
+  document.documentElement.dataset.theme = dark ? 'dark' : 'light'
+} catch (e) {}
+</script>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:ital,wght@0,400;0,500;1,400&family=Literata:ital,opsz,wght@0,7..72,400..700;1,7..72,400..700&family=Manrope:wght@500;600;700&display=swap">
+<link rel="stylesheet" id="hl-light" href="https://cdn.jsdelivr.net/npm/@highlightjs/cdn-assets@11/styles/stackoverflow-light.min.css">
+<link rel="stylesheet" id="hl-dark" href="https://cdn.jsdelivr.net/npm/@highlightjs/cdn-assets@11/styles/stackoverflow-dark.min.css" disabled>
+<style>
+:root {
+  color-scheme: light;
+  --canvas: #f2f0ea;
+  --paper: #fffefa;
+  --ink: #252722;
+  --graphite: #666a61;
+  --faint: #92978c;
+  --rule: #dedfd7;
+  --wash: #f4f3ed;
+  --draft: #2f6b5c;
+  --live: #2e7d46;
+  --alarm-fg: #a8402f;
+  --alarm-bg: #fbf1ef;
+  --alarm-rule: #edcfc9;
+  --alert-note: #2b6cb0;
+  --alert-tip: #2e7d46;
+  --alert-important: #6b46c1;
+  --alert-warning: #b7791f;
+  --alert-caution: #a8402f;
+  --shadow: 0 1px 0 rgba(37, 39, 34, .03), 0 28px 70px rgba(37, 39, 34, .08);
+  --serif: 'Literata', Georgia, 'Times New Roman', serif;
+  --sans: 'Manrope', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+  --mono: 'IBM Plex Mono', ui-monospace, SFMono-Regular, Menlo, monospace;
+  --slug-h: 56px;
+}
+:root[data-theme="dark"] {
+  color-scheme: dark;
+  --canvas: #111310;
+  --paper: #191b17;
+  --ink: #edebe3;
+  --graphite: #adb0a7;
+  --faint: #777b73;
+  --rule: #2e312b;
+  --wash: #22251f;
+  --draft: #88b9aa;
+  --live: #5cad74;
+  --alarm-fg: #e5776a;
+  --alarm-bg: #2a1917;
+  --alarm-rule: #4e2620;
+  --alert-note: #63b3ed;
+  --alert-tip: #5cad74;
+  --alert-important: #b794f4;
+  --alert-warning: #ecc94b;
+  --alert-caution: #e5776a;
+  --shadow: 0 1px 0 rgba(255, 255, 255, .02), 0 28px 75px rgba(0, 0, 0, .3);
+}
+* { box-sizing: border-box }
+html { -webkit-text-size-adjust: 100%; scrollbar-color: var(--rule) transparent; scrollbar-gutter: stable }
+body {
+  margin: 0;
+  background: var(--canvas);
+  color: var(--ink);
+  font: 400 17px/1.76 var(--serif);
+  font-optical-sizing: auto;
+  text-rendering: optimizeLegibility;
+}
+::selection { background: color-mix(in srgb, var(--draft) 18%, transparent) }
+button {
+  font-family: var(--sans);
+  color: inherit;
+}
+:focus-visible { outline: 2px solid var(--draft); outline-offset: 3px }
+#slug {
+  position: sticky;
+  top: 0;
+  z-index: 20;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 20px;
+  height: var(--slug-h);
+  padding: 0 28px;
+  background: color-mix(in srgb, var(--paper) 88%, transparent);
+  backdrop-filter: blur(14px) saturate(1.2);
+  border-bottom: 1px solid var(--rule);
+  font: 500 11.5px/1 var(--sans);
+  color: var(--graphite);
+}
+#doc-name {
+  font-weight: 600;
+  letter-spacing: -.01em;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+#slug-left { display: flex; align-items: center; min-width: 0; gap: 12px }
+#explorer-toggle, #explorer-close {
+  flex: none;
+  display: grid;
+  place-items: center;
+  width: 32px;
+  height: 32px;
+  padding: 0;
+  border: 0;
+  border-radius: 5px;
+  background: transparent;
+  color: var(--graphite);
+  cursor: pointer;
+}
+#explorer-toggle svg, #explorer-close svg { width: 17px; height: 17px; stroke: currentColor }
+#explorer-toggle:hover, #explorer-close:hover { background: var(--wash); color: var(--ink) }
+#slug-right { display: flex; align-items: center; gap: 18px; white-space: nowrap }
+#doc-stats, #saved-at { color: var(--faint) }
+#live-flag { display: inline-flex; align-items: center; gap: 6px; color: var(--faint) }
+#live-flag::before {
+  content: '';
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--faint);
+  transition: background .3s;
+}
+#live-flag.on { color: var(--graphite) }
+#live-flag.on::before { background: var(--live) }
+#theme-btn {
+  font-size: 10.5px;
+  font-weight: 600;
+  line-height: 1;
+  padding: 8px 12px;
+  min-width: 90px;
+  border: 1px solid var(--rule);
+  border-radius: 999px;
+  background: var(--paper);
+  color: var(--graphite);
+  cursor: pointer;
+  transition: border-color .15s, color .15s, background .15s;
+}
+#theme-btn:hover { border-color: var(--faint); color: var(--ink); background: var(--wash) }
+#banner {
+  position: sticky;
+  top: var(--slug-h);
+  z-index: 19;
+  padding: 10px 22px;
+  font: 400 12px/1.5 var(--mono);
+  background: var(--alarm-bg);
+  color: var(--alarm-fg);
+  border-bottom: 1px solid var(--alarm-rule);
+}
+#explorer {
+  position: fixed;
+  z-index: 40;
+  top: var(--slug-h);
+  bottom: 0;
+  left: 0;
+  display: flex;
+  width: min(340px, calc(100vw - 40px));
+  flex-direction: column;
+  background: var(--paper);
+  border-right: 1px solid var(--rule);
+  box-shadow: 18px 0 55px rgba(20, 24, 20, .14);
+  transform: translateX(-102%);
+  transition: transform .2s cubic-bezier(.2, .7, .3, 1);
+}
+body.explorer-open { overflow: hidden }
+body.explorer-open #explorer { transform: translateX(0) }
+#explorer-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 18px 16px 14px 20px;
+  border-bottom: 1px solid var(--rule);
+}
+#explorer-title { min-width: 0 }
+#explorer-title strong { display: block; font: 600 13px/1.2 var(--sans); color: var(--ink) }
+#explorer-title span { display: block; margin-top: 4px; overflow: hidden; color: var(--faint); font: 400 10.5px/1.3 var(--mono); text-overflow: ellipsis; white-space: nowrap }
+#file-tree { flex: 1; overflow: auto; padding: 12px 10px 40px }
+.tree-directory { margin: 1px 0 }
+.tree-directory > summary, .tree-file {
+  display: block;
+  width: 100%;
+  padding: 7px 10px;
+  border-radius: 5px;
+  color: var(--graphite);
+  font: 500 12px/1.35 var(--sans);
+  text-decoration: none;
+  cursor: pointer;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.tree-directory > summary { display: list-item; font-weight: 600 }
+.tree-directory > summary:hover, .tree-file:not(.tree-static):hover { background: var(--wash); color: var(--ink) }
+.tree-file.active { background: color-mix(in srgb, var(--draft) 10%, transparent); color: var(--draft) }
+.tree-file.tree-static { color: var(--faint); cursor: default }
+.tree-children { margin: 2px 0 4px 10px; padding-left: 8px; border-left: 1px solid var(--rule) }
+.tree-message { padding: 8px 10px; color: var(--faint); font: 400 11px/1.5 var(--sans) }
+#explorer-scrim {
+  position: fixed;
+  z-index: 39;
+  inset: var(--slug-h) 0 0;
+  border: 0;
+  background: rgba(15, 18, 15, .24);
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity .2s;
+}
+body.explorer-open #explorer-scrim { opacity: 1; pointer-events: auto }
+#layout {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  max-width: 51rem;
+  margin: 0 auto;
+  padding: 48px 28px 120px;
+}
+#toc-aside { min-width: 0; margin-bottom: 34px }
+#toc summary {
+  font: 700 10.5px/1 var(--sans);
+  letter-spacing: .14em;
+  text-transform: uppercase;
+  color: var(--faint);
+  cursor: pointer;
+  user-select: none;
+}
+#toc-nav { display: flex; flex-direction: column; gap: 3px; margin-top: 16px }
+#toc-nav a {
+  display: flex;
+  gap: 10px;
+  font: 500 12.5px/1.45 var(--sans);
+  color: var(--graphite);
+  text-decoration: none;
+  padding: 5px 10px;
+  border-radius: 6px;
+  transition: color .15s, background .15s;
+}
+#toc-nav a:hover { color: var(--ink); background: var(--wash) }
+#toc-nav a.active { color: var(--draft); background: color-mix(in srgb, var(--draft) 8%, transparent) }
+#toc-nav a.active .toc-num { color: var(--draft) }
+.toc-num { font: 400 11px/1.7 var(--mono); color: var(--faint); min-width: 2.6ch }
+#toc-nav a.toc-l2 { padding-left: 18px }
+#toc-nav a.toc-l3 { padding-left: 36px }
+main {
+  min-width: 0;
+  padding: 60px 64px 96px;
+  background: var(--paper);
+  border: 1px solid var(--rule);
+  border-radius: 16px;
+  box-shadow: var(--shadow);
+}
+@media (min-width: 1120px) {
+  #layout { grid-template-columns: 236px minmax(0, 1fr); gap: 64px; max-width: 78rem }
+  #layout:has(> #toc-aside[hidden]) { grid-template-columns: minmax(0, 1fr); gap: 0; max-width: 58.75rem }
+  #toc-aside { margin-bottom: 0 }
+  #toc {
+    position: sticky;
+    top: calc(var(--slug-h) + 44px);
+    max-height: calc(100vh - var(--slug-h) - 88px);
+    overflow: auto;
+  }
+  #toc summary { pointer-events: none; list-style: none }
+  #toc summary::-webkit-details-marker { display: none }
+}
+article.markdown { max-width: 43rem; margin: 0 auto }
+@media (prefers-reduced-motion: no-preference) {
+  .markdown.rise { animation: rise .45s cubic-bezier(.2, .7, .3, 1) both }
+  @keyframes rise {
+    from { opacity: 0; transform: translateY(8px) }
+    to { opacity: 1; transform: none }
+  }
+}
+.markdown { overflow-wrap: break-word }
+.markdown > :first-child { margin-top: 0 }
+.markdown h1, .markdown h2, .markdown h3, .markdown h4, .markdown h5, .markdown h6 {
+  font-family: var(--sans);
+  font-weight: 600;
+  line-height: 1.15;
+  margin: 2.5em 0 .68em;
+  scroll-margin-top: calc(var(--slug-h) + 28px);
+}
+.markdown h1 {
+  font-size: clamp(2.1rem, 4.5vw, 2.9rem);
+  font-weight: 600;
+  letter-spacing: -.04em;
+  line-height: 1.08;
+  margin: 0 0 .9em;
+}
+.markdown h2 { font-size: 1.65rem; letter-spacing: -.03em }
+.markdown h3 { font-size: 1.22rem; letter-spacing: -.018em }
+.markdown h4, .markdown h5, .markdown h6 { font-size: 1rem }
+.markdown h2, .markdown h3 { position: relative }
+.sec-num {
+  font: 500 12px/1 var(--mono);
+  color: var(--faint);
+  margin-right: 12px;
+}
+@media (min-width: 1280px) {
+  .sec-num {
+    position: absolute;
+    top: .4em;
+    right: calc(100% + 22px);
+    margin-right: 0;
+  }
+}
+.markdown p { margin: 0 0 1.35em }
+.markdown a {
+  color: var(--draft);
+  text-decoration: underline;
+  text-decoration-thickness: 1px;
+  text-decoration-color: color-mix(in srgb, var(--draft) 32%, transparent);
+  text-underline-offset: 3px;
+}
+.markdown a:hover { text-decoration-color: var(--draft) }
+.markdown ul, .markdown ol { margin: 0 0 1.35em; padding-left: 1.45em }
+.markdown li { margin: .4em 0 }
+.markdown li > ul, .markdown li > ol { margin-bottom: 0 }
+.markdown li::marker { color: var(--faint) }
+.markdown li:has(> input[type="checkbox"]) { list-style: none; margin-left: -1.4em }
+.markdown input[type="checkbox"] { accent-color: var(--draft); margin-right: .5em }
+.markdown blockquote {
+  margin: 0 0 1.55em;
+  padding: .85em 1.2em;
+  border-left: 3px solid var(--draft);
+  border-radius: 0 8px 8px 0;
+  background: color-mix(in srgb, var(--draft) 5%, transparent);
+  color: var(--graphite);
+}
+.markdown blockquote > :last-child { margin-bottom: 0 }
+.markdown blockquote.gh-alert { border-left-color: var(--alert-color); background: color-mix(in srgb, var(--alert-color) 7%, transparent); color: var(--ink) }
+.markdown blockquote.gh-alert-note { --alert-color: var(--alert-note) }
+.markdown blockquote.gh-alert-tip { --alert-color: var(--alert-tip) }
+.markdown blockquote.gh-alert-important { --alert-color: var(--alert-important) }
+.markdown blockquote.gh-alert-warning { --alert-color: var(--alert-warning) }
+.markdown blockquote.gh-alert-caution { --alert-color: var(--alert-caution) }
+.gh-alert-title {
+  display: block;
+  margin-bottom: .45em;
+  font: 700 11px/1.2 var(--sans);
+  letter-spacing: .1em;
+  text-transform: uppercase;
+  color: var(--alert-color);
+}
+.markdown hr {
+  border: 0;
+  border-top: 1px solid var(--rule);
+  width: 88px;
+  margin: 3.2em auto;
+}
+.markdown img { display: block; max-width: 100%; height: auto; border: 1px solid var(--rule); border-radius: 8px }
+.markdown table {
+  display: block;
+  width: 100%;
+  max-width: 100%;
+  overflow-x: auto;
+  border-collapse: collapse;
+  margin: 0 0 2em;
+  font-family: var(--sans);
+}
+.markdown th {
+  font: 500 10.5px/1.6 var(--mono);
+  letter-spacing: .08em;
+  text-transform: uppercase;
+  color: var(--graphite);
+  text-align: left;
+  padding: .65em 1.1em;
+  background: var(--wash);
+  border-bottom: 1px solid var(--rule);
+}
+.markdown td {
+  font-size: 14px;
+  line-height: 1.55;
+  padding: .75em 1.1em;
+  border-bottom: 1px solid var(--rule);
+  text-align: left;
+  vertical-align: top;
+}
+.markdown code {
+  font-family: var(--mono);
+  font-size: .82em;
+  background: var(--wash);
+  padding: .12em .38em;
+  border-radius: 3px;
+}
+.markdown pre {
+  margin: 0 0 2em;
+  padding: 20px 22px;
+  background: var(--wash);
+  border: 1px solid var(--rule);
+  border-radius: 8px;
+  overflow-x: auto;
+  line-height: 1.7;
+}
+.markdown pre code { background: transparent; padding: 0; border-radius: 0; font-size: 13px }
+.markdown pre code.hljs { background: transparent; padding: 0 }
+.codeblock { position: relative; margin: 0 0 2em }
+.codeblock pre { margin: 0 }
+.copy-btn {
+  position: absolute;
+  top: 9px;
+  right: 9px;
+  font-size: 11px;
+  padding: 5px 9px;
+  border: 1px solid var(--rule);
+  border-radius: 5px;
+  background: var(--paper);
+  color: var(--graphite);
+  cursor: pointer;
+  opacity: 0;
+  transition: opacity .15s;
+}
+.codeblock:hover .copy-btn, .copy-btn:focus-visible, .copy-btn.done { opacity: 1 }
+.copy-btn:hover { color: var(--ink); border-color: var(--faint) }
+.copy-btn.done { color: var(--live); border-color: var(--live) }
+@media (hover: none) { .copy-btn { opacity: 1 } }
+.diagram { position: relative; margin: 0 0 2em; border: 1px solid var(--rule); border-radius: 10px; background: var(--paper); overflow: hidden }
+.diagram-toolbar {
+  display: flex;
+  flex: 0 0 auto;
+  gap: 2px;
+  justify-content: flex-end;
+  padding: 7px 9px;
+  border-bottom: 1px solid var(--rule);
+  background: var(--wash);
+}
+.diagram-toolbar button {
+  display: grid;
+  place-items: center;
+  width: 34px;
+  height: 34px;
+  min-width: 34px;
+  padding: 0;
+  border: 0;
+  border-radius: 4px;
+  background: transparent;
+  color: var(--graphite);
+  cursor: pointer;
+}
+.diagram-toolbar button svg { width: 17px; height: 17px; stroke: currentColor }
+.diagram-toolbar button:hover { background: var(--wash); color: var(--ink) }
+.diagram-viewport {
+  position: relative;
+  overflow: hidden;
+  touch-action: none;
+  cursor: grab;
+  padding: 24px;
+  max-height: 70vh;
+  user-select: none;
+  overscroll-behavior: contain;
+}
+.diagram-viewport.dragging { cursor: grabbing }
+.diagram-canvas { width: fit-content; margin: 0 auto; transform-origin: center center; will-change: transform }
+.diagram-canvas svg { display: block; pointer-events: none }
+.image-diagram .diagram-viewport { height: min(70vh, 640px); max-height: none }
+.image-diagram .diagram-canvas { position: absolute; top: 50%; left: 50%; margin: 0 }
+.image-diagram .diagram-canvas img { max-width: none; border: 0; border-radius: 0; pointer-events: none; user-select: none }
+.diagram:fullscreen { display: flex; width: 100%; height: 100%; flex-direction: column; border: 0; border-radius: 0; background: var(--paper) }
+.diagram:fullscreen .diagram-toolbar { padding: 10px 14px }
+.diagram:fullscreen .diagram-viewport { flex: 1; min-height: 0; max-height: none }
+.image-diagram:fullscreen .diagram-viewport { height: auto }
+.diagram-error { font: 400 12.5px/1.6 var(--mono); color: var(--alarm-fg) }
+.diagram-error pre { margin: 10px 0 0 }
+#doc.loading { font: 400 13px/1 var(--mono); color: var(--faint) }
+@media (max-width: 719px) {
+  :root { --slug-h: 52px }
+  #doc-stats, #saved-at { display: none }
+  #slug { padding: 0 16px }
+  #slug-left { gap: 6px }
+  #slug-right { gap: 12px }
+  #explorer-toggle, #explorer-close, #theme-btn { min-height: 38px }
+  #theme-btn { min-width: 78px; padding: 6px 9px }
+  .tree-directory > summary, .tree-file, #toc-nav a, .diagram-toolbar button { min-height: 38px }
+  #toc-nav a { align-items: center }
+  #layout { padding: 24px 14px 80px }
+  #toc-aside { margin: 0 10px 24px }
+  main { padding: 36px 22px 68px; border-radius: 14px }
+  .markdown h1 { font-size: clamp(2rem, 10vw, 2.55rem) }
+  .markdown pre, .diagram { margin-left: -8px; margin-right: -8px }
+}
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after { scroll-behavior: auto !important; transition-duration: 0s !important; animation-duration: 0s !important }
+}
+</style>
+</head>
+<body>
+<header id="slug">
+  <div id="slug-left">
+    <button id="explorer-toggle" type="button" aria-label="Open files" title="Open files" aria-controls="explorer" aria-expanded="false">
+      <svg viewBox="0 0 24 24" fill="none" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 6.75A1.75 1.75 0 0 1 4.75 5h4.19c.46 0 .9.18 1.23.51L11.66 7h7.59A1.75 1.75 0 0 1 21 8.75v8.5A1.75 1.75 0 0 1 19.25 19H4.75A1.75 1.75 0 0 1 3 17.25z"/></svg>
+    </button>
+    <div id="doc-name">{{TITLE}}</div>
+  </div>
+  <div id="slug-right">
+    <span id="doc-stats"></span>
+    <span id="saved-at"></span>
+    <span id="live-flag">live</span>
+    <button id="theme-btn" type="button" title="Cycle color theme">auto</button>
+  </div>
+</header>
+<div id="banner" hidden></div>
+<aside id="explorer" aria-label="File explorer" aria-hidden="true" inert>
+  <header id="explorer-head">
+    <div id="explorer-title"><strong>{{ROOT_NAME}}</strong><span>/{{ROOT_NAME}}</span></div>
+    <button id="explorer-close" type="button" aria-label="Close files" title="Close files">
+      <svg viewBox="0 0 24 24" fill="none" stroke-width="1.8" stroke-linecap="round" aria-hidden="true"><path d="m6 6 12 12M18 6 6 18"/></svg>
+    </button>
+  </header>
+  <nav id="file-tree" aria-label="Files"></nav>
+</aside>
+<button id="explorer-scrim" type="button" aria-label="Close file explorer" hidden></button>
+<div id="layout">
+  <aside id="toc-aside" hidden>
+    <details id="toc" open>
+      <summary>contents</summary>
+      <nav id="toc-nav"></nav>
+    </details>
+  </aside>
+  <main>
+    <article id="doc" class="markdown loading">loading…</article>
+  </main>
+</div>
+<script>const BASE_PATH = {{BASE_PATH_JSON}}; const DOC_PATH = {{DOC_PATH_JSON}};</script>
+<script type="module">
+const MARKED_URL = BASE_PATH + '/__vendor/marked.esm.js'
+const HLJS_URL = 'https://cdn.jsdelivr.net/npm/@highlightjs/cdn-assets@11/es/highlight.min.js'
+const MERMAID_URL = 'https://cdn.jsdelivr.net/npm/mermaid@11/dist/mermaid.esm.min.mjs'
+const THEME_KEY = 'md-preview.theme'
+
+const docEl = document.getElementById('doc')
+const docName = document.getElementById('doc-name')
+const banner = document.getElementById('banner')
+const tocAside = document.getElementById('toc-aside')
+const tocDetails = document.getElementById('toc')
+const tocNav = document.getElementById('toc-nav')
+const themeButton = document.getElementById('theme-btn')
+const liveFlag = document.getElementById('live-flag')
+const docStats = document.getElementById('doc-stats')
+const savedAt = document.getElementById('saved-at')
+const explorer = document.getElementById('explorer')
+const explorerToggle = document.getElementById('explorer-toggle')
+const explorerClose = document.getElementById('explorer-close')
+const explorerScrim = document.getElementById('explorer-scrim')
+const fileTree = document.getElementById('file-tree')
+const lightHl = document.getElementById('hl-light')
+const darkHl = document.getElementById('hl-dark')
+const systemDark = matchMedia('(prefers-color-scheme: dark)')
+const narrowScreen = matchMedia('(max-width: 1119px)')
+const reducedMotion = matchMedia('(prefers-reduced-motion: reduce)')
+const numberFormat = new Intl.NumberFormat()
+
+const diagramViews = new WeakMap()
+const diagrams = []
+let currentDocPath = DOC_PATH
+let events = null
+let markedPromise = null
+let hljsPromise = null
+let mermaidPromise = null
+let renderSeq = 0
+let firstRender = true
+let loading = false
+let queued = false
+let queuedChanged = false
+let treeLoaded = false
+
+const fullPath = docPath => BASE_PATH + docPath
+const stripBase = pathname => pathname.startsWith(BASE_PATH + '/') ? pathname.slice(BASE_PATH.length) : pathname === BASE_PATH ? '/' : null
+const docUrl = docPath => BASE_PATH + '/__doc?path=' + encodeURIComponent(docPath)
+const eventsUrl = docPath => BASE_PATH + '/__events?path=' + encodeURIComponent(docPath)
+const treeUrl = dirPath => BASE_PATH + '/__tree?path=' + encodeURIComponent(dirPath)
+const scrollKey = docPath => 'md-preview.scroll:' + BASE_PATH + docPath
+
+function showError(message) {
+  banner.textContent = message
+  banner.hidden = false
+}
+
+function clearError() {
+  banner.hidden = true
+}
+
+function themeSetting() {
+  try {
+    return localStorage.getItem(THEME_KEY) || 'auto'
+  } catch (err) {
+    return 'auto'
+  }
+}
+
+function effectiveTheme() {
+  const setting = themeSetting()
+  if (setting === 'auto') return systemDark.matches ? 'dark' : 'light'
+  return setting
+}
+
+function applyTheme() {
+  const setting = themeSetting()
+  const effective = effectiveTheme()
+  document.documentElement.dataset.theme = effective
+  themeButton.textContent = 'theme · ' + setting
+  themeButton.setAttribute('aria-label', 'Color theme: ' + setting)
+  lightHl.disabled = effective === 'dark'
+  darkHl.disabled = effective !== 'dark'
+  rethemeDiagrams()
+}
+
+themeButton.addEventListener('click', () => {
+  const order = ['auto', 'light', 'dark']
+  const next = order[(order.indexOf(themeSetting()) + 1) % order.length]
+  try {
+    localStorage.setItem(THEME_KEY, next)
+  } catch (err) {}
+  applyTheme()
+})
+
+systemDark.addEventListener('change', () => {
+  if (themeSetting() === 'auto') applyTheme()
+})
+
+function syncTocMode() {
+  tocDetails.open = !narrowScreen.matches
+}
+narrowScreen.addEventListener('change', syncTocMode)
+syncTocMode()
+
+function setExplorer(open) {
+  const returnFocus = !open && (explorer.contains(document.activeElement) || document.activeElement === explorerScrim)
+  document.body.classList.toggle('explorer-open', open)
+  explorer.inert = !open
+  explorerScrim.hidden = !open
+  explorer.setAttribute('aria-hidden', String(!open))
+  explorerToggle.setAttribute('aria-expanded', String(open))
+  if (open && !treeLoaded) {
+    treeLoaded = true
+    loadDirectory('/', fileTree)
+  }
+  if (open) requestAnimationFrame(() => explorerClose.focus())
+  else if (returnFocus) explorerToggle.focus()
+}
+
+function refreshActiveFiles() {
+  for (const link of fileTree.querySelectorAll('.tree-file[data-path]')) link.classList.toggle('active', link.dataset.path === currentDocPath)
+}
+
+async function loadDirectory(dirPath, container) {
+  container.innerHTML = '<div class="tree-message">loading…</div>'
+  try {
+    const response = await fetch(treeUrl(dirPath), { cache: 'no-store' })
+    if (!response.ok) throw new Error(await response.text())
+    const { entries } = await response.json()
+    container.replaceChildren(...entries.map(entry => {
+      if (entry.type === 'directory') {
+        const details = document.createElement('details')
+        details.className = 'tree-directory'
+        const summary = document.createElement('summary')
+        summary.textContent = entry.name
+        const children = document.createElement('div')
+        children.className = 'tree-children'
+        details.append(summary, children)
+        details.addEventListener('toggle', () => {
+          if (details.open && !details.dataset.loaded) {
+            details.dataset.loaded = 'true'
+            loadDirectory(entry.path, children)
+          }
+        })
+        return details
+      }
+      const previewable = entry.type === 'markdown' || entry.type === 'image'
+      const link = document.createElement(previewable ? 'a' : 'span')
+      link.className = 'tree-file'
+      link.textContent = entry.name
+      link.dataset.path = entry.path
+      if (previewable) {
+        link.href = fullPath(entry.path)
+        link.addEventListener('click', event => {
+          if (event.button || event.metaKey || event.ctrlKey || event.shiftKey || event.altKey) return
+          event.preventDefault()
+          openPreview(entry.path)
+        })
+      } else {
+        link.classList.add('tree-static')
+      }
+      return link
+    }))
+    if (!entries.length) container.innerHTML = '<div class="tree-message">empty folder</div>'
+    refreshActiveFiles()
+  } catch (err) {
+    container.innerHTML = ''
+    const message = document.createElement('div')
+    message.className = 'tree-message'
+    message.textContent = err.message
+    container.append(message)
+  }
+}
+
+function fileName(docPath) {
+  const name = docPath.split('/').pop() || docPath
+  try {
+    return decodeURIComponent(name)
+  } catch (err) {
+    return name
+  }
+}
+
+function previewType(filePath) {
+  if (/\.(?:md|markdown|mdx)$/i.test(filePath)) return 'markdown'
+  if (/\.(?:avif|gif|jpe?g|png|svg|webp)$/i.test(filePath)) return 'image'
+  return null
+}
+
+function openPreview(docPath, push = true) {
+  if (!previewType(docPath)) return
+  try {
+    sessionStorage.setItem(scrollKey(currentDocPath), String(Math.round(scrollY)))
+  } catch (err) {}
+  currentDocPath = docPath
+  firstRender = true
+  docName.textContent = fileName(docPath)
+  document.title = fileName(docPath)
+  if (push) history.pushState(null, '', fullPath(docPath))
+  refreshActiveFiles()
+  setExplorer(false)
+  connectEvents()
+  loadCurrent(false)
+}
+
+explorerToggle.addEventListener('click', () => setExplorer(!document.body.classList.contains('explorer-open')))
+explorerClose.addEventListener('click', () => setExplorer(false))
+explorerScrim.addEventListener('click', () => setExplorer(false))
+addEventListener('keydown', event => {
+  if (event.key === 'Escape' && document.body.classList.contains('explorer-open')) setExplorer(false)
+})
+addEventListener('popstate', () => {
+  const rel = stripBase(location.pathname)
+  if (rel && rel !== currentDocPath) openPreview(rel, false)
+  else if (!scrollToHeading(location.hash)) window.scrollTo(0, 0)
+})
+history.replaceState(null, '', fullPath(DOC_PATH) + location.hash)
+
+function getMarked() {
+  if (!markedPromise) {
+    markedPromise = import(MARKED_URL).then(mod => {
+      mod.marked.use({ gfm: true })
+      return mod.marked
+    }).catch(() => null)
+  }
+  return markedPromise
+}
+
+function getHljs() {
+  if (!hljsPromise) hljsPromise = import(HLJS_URL).then(mod => mod.default).catch(() => null)
+  return hljsPromise
+}
+
+function getMermaid() {
+  if (!mermaidPromise) mermaidPromise = import(MERMAID_URL).then(mod => mod.default).catch(() => null)
+  return mermaidPromise
+}
+
+function updateStats(markdown, changed) {
+  const words = (markdown.trim().match(/\S+/g) || []).length
+  const minutes = Math.max(1, Math.round(words / 220))
+  docStats.textContent = numberFormat.format(words) + ' words · ' + minutes + ' min'
+  updateOpened(changed)
+}
+
+function updateOpened(changed) {
+  const clock = new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', hour12: false })
+  savedAt.textContent = (changed ? 'saved ' : 'opened ') + clock
+}
+
+function slugify(text) {
+  const slug = text.toLowerCase().trim().replace(/[^\w\s-]/g, '').replace(/[\s_]+/g, '-').replace(/^-+|-+$/g, '')
+  return slug || 'section'
+}
+
+function assignHeadingIds() {
+  const used = new Map()
+  for (const heading of docEl.querySelectorAll('h1, h2, h3, h4, h5, h6')) {
+    const base = slugify(heading.textContent)
+    const count = used.get(base) || 0
+    used.set(base, count + 1)
+    heading.id = count ? base + '-' + count : base
+  }
+}
+
+function numberSections() {
+  const majors = docEl.querySelectorAll('h2')
+  if (majors.length < 2) return
+  let section = 0
+  let sub = 0
+  for (const heading of docEl.querySelectorAll('h2, h3')) {
+    if (heading.tagName === 'H2') {
+      section++
+      sub = 0
+    } else {
+      if (!section) continue
+      sub++
+    }
+    const label = heading.tagName === 'H2' ? String(section) : section + '.' + sub
+    heading.dataset.title = heading.textContent
+    heading.dataset.sec = label
+    const marker = document.createElement('span')
+    marker.className = 'sec-num'
+    marker.textContent = label
+    heading.prepend(marker)
+  }
+}
+
+function buildToc() {
+  const headings = [...docEl.querySelectorAll('h1, h2, h3')]
+  if (headings.length < 2) {
+    tocAside.hidden = true
+    tocNav.replaceChildren()
+    return
+  }
+  tocAside.hidden = false
+  const minLevel = Math.min(...headings.map(h => Number(h.tagName[1])))
+  tocNav.replaceChildren(...headings.map(heading => {
+    const link = document.createElement('a')
+    link.href = '#' + heading.id
+    link.className = 'toc-l' + (Number(heading.tagName[1]) - minLevel + 1)
+    if (heading.dataset.sec) {
+      const num = document.createElement('span')
+      num.className = 'toc-num'
+      num.textContent = heading.dataset.sec
+      link.append(num)
+    }
+    const label = document.createElement('span')
+    label.textContent = heading.dataset.title ?? heading.textContent
+    link.append(label)
+    return link
+  }))
+}
+
+function headingFromHash(hash) {
+  if (!hash) return null
+  try {
+    return document.getElementById(decodeURIComponent(hash.slice(1)))
+  } catch (err) {
+    return null
+  }
+}
+
+function scrollToHeading(hash, smooth = false) {
+  const heading = headingFromHash(hash)
+  if (!heading) return false
+  heading.scrollIntoView({ behavior: smooth && !reducedMotion.matches ? 'smooth' : 'auto', block: 'start' })
+  return true
+}
+
+tocNav.addEventListener('click', event => {
+  const link = event.target.closest('a')
+  if (!link || event.button || event.metaKey || event.ctrlKey || event.shiftKey || event.altKey) return
+  if (!scrollToHeading(link.hash, true)) return
+  event.preventDefault()
+  if (location.hash !== link.hash) history.pushState(null, '', link.hash)
+})
+
+let tocTick = false
+function updateActiveToc() {
+  const links = tocNav.querySelectorAll('a')
+  if (!links.length) return
+  let current = links[0]
+  for (const link of links) {
+    const heading = headingFromHash(link.hash)
+    if (heading && heading.getBoundingClientRect().top <= 96) current = link
+  }
+  for (const link of links) {
+    const active = link === current
+    link.classList.toggle('active', active)
+    if (active) link.setAttribute('aria-current', 'location')
+    else link.removeAttribute('aria-current')
+  }
+}
+addEventListener('scroll', () => {
+  if (tocTick) return
+  tocTick = true
+  requestAnimationFrame(() => {
+    tocTick = false
+    updateActiveToc()
+  })
+}, { passive: true })
+
+function upgradeAlerts() {
+  const labels = { NOTE: 'Note', TIP: 'Tip', IMPORTANT: 'Important', WARNING: 'Warning', CAUTION: 'Caution' }
+  for (const bq of docEl.querySelectorAll('blockquote')) {
+    const firstP = bq.firstElementChild
+    if (!firstP || firstP.tagName !== 'P') continue
+    const firstNode = firstP.firstChild
+    if (!firstNode || firstNode.nodeType !== Node.TEXT_NODE) continue
+    const match = firstNode.textContent.match(/^\s*\[!(NOTE|TIP|IMPORTANT|WARNING|CAUTION)\]\s*\n?/)
+    if (!match) continue
+    const kind = match[1]
+    firstNode.textContent = firstNode.textContent.slice(match[0].length)
+    if (firstP.firstChild === firstNode && !firstNode.textContent && firstNode.nextSibling?.tagName === 'BR') {
+      firstNode.nextSibling.remove()
+    }
+    bq.classList.add('gh-alert', 'gh-alert-' + kind.toLowerCase())
+    const title = document.createElement('span')
+    title.className = 'gh-alert-title'
+    title.textContent = labels[kind]
+    bq.prepend(title)
+    if (!firstP.textContent.trim() && !firstP.children.length) firstP.remove()
+  }
+}
+
+function decorateLinks() {
+  for (const link of docEl.querySelectorAll('a[href]')) {
+    const href = link.getAttribute('href')
+    if (/^https?:\/\//i.test(href)) {
+      link.target = '_blank'
+      link.rel = 'noreferrer noopener'
+      continue
+    }
+    if (/^file:/i.test(href)) continue
+    try {
+      const target = new URL(href, location.href)
+      const rel = target.origin === location.origin ? stripBase(target.pathname) : null
+      if (rel && previewType(rel) && rel !== currentDocPath) {
+        link.addEventListener('click', event => {
+          if (event.button || event.metaKey || event.ctrlKey || event.shiftKey || event.altKey) return
+          event.preventDefault()
+          openPreview(rel)
+        })
+      }
+    } catch (err) {}
+  }
+}
+
+async function highlightBlock(code, language) {
+  const hljs = await getHljs()
+  if (!hljs || !hljs.getLanguage(language)) return
+  try {
+    code.innerHTML = hljs.highlight(code.textContent, { language }).value
+    code.classList.add('hljs')
+  } catch (err) {}
+}
+
+function upgradeCodeBlocks() {
+  for (const code of docEl.querySelectorAll('pre > code')) {
+    if (code.classList.contains('language-mermaid')) continue
+    const pre = code.parentElement
+    const wrap = document.createElement('div')
+    wrap.className = 'codeblock'
+    pre.replaceWith(wrap)
+    wrap.append(pre)
+    const button = document.createElement('button')
+    button.type = 'button'
+    button.className = 'copy-btn'
+    button.textContent = 'copy'
+    button.addEventListener('click', async () => {
+      try {
+        await navigator.clipboard.writeText(code.textContent)
+        button.textContent = 'copied'
+        button.classList.add('done')
+      } catch (err) {
+        button.textContent = 'failed'
+      }
+      setTimeout(() => {
+        button.textContent = 'copy'
+        button.classList.remove('done')
+      }, 1600)
+    })
+    wrap.append(button)
+    const langClass = [...code.classList].find(cls => cls.startsWith('language-'))
+    if (langClass) highlightBlock(code, langClass.slice(9))
+  }
+}
+
+function applyView(figure) {
+  const view = diagramViews.get(figure)
+  const canvas = figure.querySelector('.diagram-canvas')
+  const center = figure.classList.contains('image-diagram') ? 'translate(-50%, -50%) ' : ''
+  canvas.style.transform = center + 'translate(' + view.x + 'px, ' + view.y + 'px) scale(' + view.scale + ')'
+}
+
+function measureDiagram(figure) {
+  const view = diagramViews.get(figure)
+  const canvas = figure.querySelector('.diagram-canvas')
+  canvas.style.transform = 'none'
+  view.width = Math.max(1, canvas.offsetWidth)
+  view.height = Math.max(1, canvas.offsetHeight)
+}
+
+function clampView(figure) {
+  const view = diagramViews.get(figure)
+  const viewport = figure.querySelector('.diagram-viewport')
+  const limitX = Math.max(0, (view.width * view.scale - viewport.clientWidth) / 2 + 40)
+  const limitY = Math.max(0, (view.height * view.scale - viewport.clientHeight) / 2 + 40)
+  view.x = Math.max(-limitX, Math.min(limitX, view.x))
+  view.y = Math.max(-limitY, Math.min(limitY, view.y))
+}
+
+function fitView(figure) {
+  const view = diagramViews.get(figure)
+  const viewport = figure.querySelector('.diagram-viewport')
+  const padding = document.fullscreenElement === figure ? 64 : 48
+  view.fitScale = Math.min(1, Math.max(1, viewport.clientWidth - padding) / view.width, Math.max(1, viewport.clientHeight - padding) / view.height)
+  view.scale = view.fitScale
+  view.x = 0
+  view.y = 0
+  view.atFit = true
+  applyView(figure)
+}
+
+function zoomAt(figure, factor, cx, cy) {
+  const view = diagramViews.get(figure)
+  const viewport = figure.querySelector('.diagram-viewport')
+  const canvas = figure.querySelector('.diagram-canvas')
+  const nextScale = Math.min(6, Math.max(view.fitScale * 0.5, view.scale * factor))
+  const applied = nextScale / view.scale
+  const offsetX = figure.classList.contains('image-diagram') ? cx - viewport.clientWidth / 2 : cx - canvas.offsetLeft - canvas.offsetWidth / 2
+  const offsetY = figure.classList.contains('image-diagram') ? cy - viewport.clientHeight / 2 : cy - canvas.offsetTop - canvas.offsetHeight / 2
+  view.x = offsetX - (offsetX - view.x) * applied
+  view.y = offsetY - (offsetY - view.y) * applied
+  view.scale = nextScale
+  view.atFit = false
+  clampView(figure)
+  applyView(figure)
+}
+
+function wirePanZoom(figure, viewport) {
+  const pointers = new Map()
+  const gesture = () => {
+    const [a, b] = [...pointers.values()]
+    if (!b) return { x: a.x, y: a.y, distance: 0 }
+    return { x: (a.x + b.x) / 2, y: (a.y + b.y) / 2, distance: Math.hypot(a.x - b.x, a.y - b.y) }
+  }
+  viewport.addEventListener('pointerdown', e => {
+    if (e.pointerType === 'mouse' && e.button !== 0) return
+    e.preventDefault()
+    viewport.focus({ preventScroll: true })
+    viewport.setPointerCapture(e.pointerId)
+    pointers.set(e.pointerId, { x: e.clientX, y: e.clientY })
+    viewport.classList.add('dragging')
+  })
+  viewport.addEventListener('pointermove', e => {
+    if (!pointers.has(e.pointerId)) return
+    const before = gesture()
+    pointers.set(e.pointerId, { x: e.clientX, y: e.clientY })
+    const after = gesture()
+    const view = diagramViews.get(figure)
+    if (pointers.size === 1) {
+      view.x += after.x - before.x
+      view.y += after.y - before.y
+      view.atFit = false
+      clampView(figure)
+      applyView(figure)
+    } else if (pointers.size === 2 && before.distance) {
+      view.x += after.x - before.x
+      view.y += after.y - before.y
+      const rect = viewport.getBoundingClientRect()
+      zoomAt(figure, after.distance / before.distance, after.x - rect.left, after.y - rect.top)
+    }
+  })
+  const release = e => {
+    pointers.delete(e.pointerId)
+    if (!pointers.size) viewport.classList.remove('dragging')
+  }
+  viewport.addEventListener('pointerup', release)
+  viewport.addEventListener('pointercancel', release)
+  viewport.addEventListener('lostpointercapture', release)
+  viewport.addEventListener('wheel', e => {
+    if (!e.ctrlKey && !e.metaKey && document.fullscreenElement !== figure) return
+    e.preventDefault()
+    const rect = viewport.getBoundingClientRect()
+    const delta = e.deltaMode === 1 ? e.deltaY * 16 : e.deltaY
+    zoomAt(figure, Math.exp(-delta * 0.002), e.clientX - rect.left, e.clientY - rect.top)
+  }, { passive: false })
+  viewport.addEventListener('dblclick', e => {
+    const rect = viewport.getBoundingClientRect()
+    zoomAt(figure, e.shiftKey ? 1 / 1.5 : 1.5, e.clientX - rect.left, e.clientY - rect.top)
+  })
+  viewport.addEventListener('keydown', e => {
+    const center = { x: viewport.clientWidth / 2, y: viewport.clientHeight / 2 }
+    if (e.key === '+' || e.key === '=') zoomAt(figure, 1.2, center.x, center.y)
+    else if (e.key === '-') zoomAt(figure, 1 / 1.2, center.x, center.y)
+    else if (e.key === '0') fitView(figure)
+    else if (e.key.toLowerCase() === 'f') toggleFullscreen(figure)
+    else return
+    e.preventDefault()
+  })
+}
+
+const diagramIcons = {
+  zoomOut: '<circle cx="11" cy="11" r="7"/><path d="m20 20-4-4M8 11h6"/>',
+  zoomIn: '<circle cx="11" cy="11" r="7"/><path d="m20 20-4-4M8 11h6M11 8v6"/>',
+  fit: '<path d="M3 7V5a2 2 0 0 1 2-2h2M17 3h2a2 2 0 0 1 2 2v2M21 17v2a2 2 0 0 1-2 2h-2M7 21H5a2 2 0 0 1-2-2v-2"/><rect x="7" y="7" width="10" height="10" rx="1"/>',
+  fullscreen: '<path d="M8 3H3v5M16 3h5v5M8 21H3v-5M16 21h5v-5"/>',
+}
+
+function diagramButton(toolbar, icon, label, onClick) {
+  const button = document.createElement('button')
+  button.type = 'button'
+  button.title = label
+  button.setAttribute('aria-label', label)
+  button.innerHTML = '<svg viewBox="0 0 24 24" fill="none" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">' + diagramIcons[icon] + '</svg>'
+  button.addEventListener('click', onClick)
+  toolbar.append(button)
+  return button
+}
+
+async function toggleFullscreen(figure) {
+  if (document.fullscreenElement === figure) return document.exitFullscreen()
+  if (!figure.requestFullscreen) return
+  const view = diagramViews.get(figure)
+  view.normal = { scale: view.scale, x: view.x, y: view.y, fitScale: view.fitScale, atFit: view.atFit }
+  try {
+    await figure.requestFullscreen()
+  } catch (err) {
+    view.normal = null
+  }
+}
+
+function buildDiagramShell(source, contentLabel = 'diagram') {
+  const figure = document.createElement('figure')
+  figure.className = 'diagram'
+  if (source != null) figure.dataset.source = source
+  const toolbar = document.createElement('div')
+  toolbar.className = 'diagram-toolbar'
+  const viewport = document.createElement('div')
+  viewport.className = 'diagram-viewport'
+  viewport.tabIndex = 0
+  viewport.setAttribute('aria-label', 'Interactive ' + contentLabel + '. Drag to pan, use Control or Command plus scroll to zoom, and press 0 to fit.')
+  viewport.title = 'Drag to pan · Ctrl/⌘ + scroll to zoom · double-click to zoom'
+  const canvas = document.createElement('div')
+  canvas.className = 'diagram-canvas'
+  viewport.append(canvas)
+  const center = () => ({ x: viewport.clientWidth / 2, y: viewport.clientHeight / 2 })
+  diagramButton(toolbar, 'zoomOut', 'Zoom out', () => {
+    const c = center()
+    zoomAt(figure, 1 / 1.2, c.x, c.y)
+  })
+  diagramButton(toolbar, 'zoomIn', 'Zoom in', () => {
+    const c = center()
+    zoomAt(figure, 1.2, c.x, c.y)
+  })
+  diagramButton(toolbar, 'fit', 'Fit diagram', () => fitView(figure))
+  const fullscreenButton = diagramButton(toolbar, 'fullscreen', 'Enter fullscreen', () => toggleFullscreen(figure))
+  fullscreenButton.dataset.action = 'fullscreen'
+  figure.append(toolbar, viewport)
+  diagramViews.set(figure, { scale: 1, x: 0, y: 0, fitScale: 1, width: 1, height: 1, atFit: true, fullscreen: false, normal: null })
+  wirePanZoom(figure, viewport)
+  return figure
+}
+
+document.addEventListener('fullscreenchange', () => {
+  for (const figure of diagrams) {
+    const view = diagramViews.get(figure)
+    const viewport = figure.querySelector('.diagram-viewport')
+    const button = figure.querySelector('[data-action="fullscreen"]')
+    const fullscreen = document.fullscreenElement === figure
+    button.title = fullscreen ? 'Exit fullscreen' : 'Enter fullscreen'
+    button.setAttribute('aria-label', button.title)
+    if (fullscreen) {
+      if (!view.normal) view.normal = { scale: view.scale, x: view.x, y: view.y, fitScale: view.fitScale, atFit: view.atFit }
+      view.fullscreen = true
+      viewport.style.height = ''
+      requestAnimationFrame(() => fitView(figure))
+    } else if (view.fullscreen) {
+      view.fullscreen = false
+      requestAnimationFrame(() => {
+        Object.assign(view, view.normal)
+        view.normal = null
+        clampView(figure)
+        applyView(figure)
+      })
+    }
+  }
+})
+
+let diagramResizeTick = false
+addEventListener('resize', () => {
+  if (diagramResizeTick) return
+  diagramResizeTick = true
+  requestAnimationFrame(() => {
+    diagramResizeTick = false
+    for (const figure of diagrams) {
+      const view = diagramViews.get(figure)
+      if (view.atFit) fitView(figure)
+      else {
+        clampView(figure)
+        applyView(figure)
+      }
+    }
+  })
+})
+
+function configureMermaid(mermaid) {
+  mermaid.initialize({
+    startOnLoad: false,
+    securityLevel: 'loose',
+    theme: effectiveTheme() === 'dark' ? 'dark' : 'neutral',
+    fontFamily: "'IBM Plex Mono', Menlo, monospace",
+  })
+}
+
+async function drawDiagram(mermaid, figure) {
+  const canvas = figure.querySelector('.diagram-canvas')
+  const id = 'mermaid-' + (++renderSeq)
+  try {
+    const rendered = await mermaid.render(id, figure.dataset.source)
+    canvas.innerHTML = rendered.svg
+    measureDiagram(figure)
+    fitView(figure)
+  } catch (err) {
+    document.getElementById('d' + id)?.remove()
+    const box = document.createElement('div')
+    box.className = 'diagram-error'
+    const message = document.createElement('p')
+    message.textContent = 'mermaid: ' + (err?.message || err)
+    const source = document.createElement('pre')
+    source.textContent = figure.dataset.source
+    box.append(message, source)
+    canvas.replaceChildren(box)
+    measureDiagram(figure)
+    fitView(figure)
+  }
+}
+
+async function upgradeDiagrams() {
+  const codes = [...docEl.querySelectorAll('pre > code.language-mermaid')]
+  if (!codes.length) return
+  const mermaid = await getMermaid()
+  if (!mermaid) {
+    showError('mermaid failed to load from the CDN — diagrams are shown as source')
+    return
+  }
+  configureMermaid(mermaid)
+  for (const code of codes) {
+    const figure = buildDiagramShell(code.textContent)
+    figure.classList.add('mermaid-diagram')
+    code.parentElement.replaceWith(figure)
+    diagrams.push(figure)
+    await drawDiagram(mermaid, figure)
+  }
+}
+
+async function upgradeImages() {
+  for (const image of [...docEl.querySelectorAll('img')]) {
+    const paragraph = image.parentElement
+    if (image.closest('a, .diagram') || paragraph?.tagName !== 'P' || paragraph.children.length !== 1 || paragraph.textContent.trim()) continue
+    const figure = buildDiagramShell(null, 'image')
+    figure.classList.add('image-diagram')
+    const canvas = figure.querySelector('.diagram-canvas')
+    paragraph.replaceWith(figure)
+    canvas.append(image)
+    image.draggable = false
+    if (image.decode) await image.decode().catch(() => {})
+    measureDiagram(figure)
+    fitView(figure)
+    diagrams.push(figure)
+  }
+}
+
+function rethemeDiagrams() {
+  if (!diagrams.length) return
+  getMermaid().then(mermaid => {
+    if (!mermaid) return
+    configureMermaid(mermaid)
+    for (const figure of diagrams) if (figure.classList.contains('mermaid-diagram')) drawDiagram(mermaid, figure)
+  })
+}
+
+function rawFallback(markdown) {
+  const pre = document.createElement('pre')
+  pre.textContent = markdown
+  return pre
+}
+
+async function renderDoc(markdown) {
+  const marked = await getMarked()
+  docEl.classList.remove('loading')
+  if (!marked) {
+    docEl.replaceChildren(rawFallback(markdown))
+    showError('the bundled markdown renderer failed to load — showing raw source')
+    return
+  }
+  let html
+  try {
+    html = await marked.parse(markdown)
+  } catch (err) {
+    showError('markdown rendering failed: ' + err.message)
+    return
+  }
+  const wasFirst = firstRender
+  firstRender = false
+  let scrollY = window.scrollY
+  if (wasFirst) {
+    docEl.classList.add('rise')
+    const remembered = Number(sessionStorage.getItem(scrollKey(currentDocPath)))
+    if (remembered) scrollY = remembered
+  } else {
+    docEl.classList.remove('rise')
+  }
+  docEl.innerHTML = html
+  diagrams.length = 0
+  upgradeAlerts()
+  assignHeadingIds()
+  numberSections()
+  buildToc()
+  decorateLinks()
+  upgradeCodeBlocks()
+  await upgradeImages()
+  if (!(wasFirst && scrollToHeading(location.hash))) window.scrollTo(0, scrollY)
+  updateActiveToc()
+  await upgradeDiagrams()
+}
+
+async function loadDoc(changed) {
+  if (loading) {
+    queued = true
+    queuedChanged = changed
+    return
+  }
+  loading = true
+  const requestedPath = currentDocPath
+  try {
+    const res = await fetch(docUrl(requestedPath), { cache: 'no-store' })
+    const text = await res.text()
+    if (requestedPath !== currentDocPath) {
+      queued = true
+      queuedChanged = false
+      return
+    }
+    if (!res.ok) {
+      showError(text || 'failed to load document (' + res.status + ')')
+      return
+    }
+    clearError()
+    updateStats(text, changed)
+    await renderDoc(text)
+  } catch (err) {
+    showError('could not reach the preview server: ' + err.message)
+  } finally {
+    loading = false
+    if (queued) {
+      const nextChanged = queuedChanged
+      queued = false
+      queuedChanged = false
+      loadCurrent(nextChanged)
+    }
+  }
+}
+
+async function loadImage(changed) {
+  if (loading) {
+    queued = true
+    queuedChanged = changed
+    return
+  }
+  loading = true
+  const requestedPath = currentDocPath
+  try {
+    clearError()
+    docEl.classList.remove('loading')
+    docEl.classList.toggle('rise', firstRender)
+    firstRender = false
+    tocAside.hidden = true
+    tocNav.replaceChildren()
+    diagrams.length = 0
+    const figure = buildDiagramShell(null, 'image')
+    figure.classList.add('image-diagram')
+    const image = document.createElement('img')
+    image.alt = fileName(requestedPath)
+    image.draggable = false
+    image.src = fullPath(requestedPath) + (changed ? '?changed=' + Date.now() : '')
+    figure.querySelector('.diagram-canvas').append(image)
+    docEl.replaceChildren(figure)
+    await image.decode()
+    if (requestedPath !== currentDocPath) {
+      queued = true
+      queuedChanged = false
+      return
+    }
+    diagrams.push(figure)
+    measureDiagram(figure)
+    fitView(figure)
+    docStats.textContent = numberFormat.format(image.naturalWidth) + ' × ' + numberFormat.format(image.naturalHeight)
+    updateOpened(changed)
+    window.scrollTo(0, 0)
+  } catch (err) {
+    showError('could not load image: ' + err.message)
+  } finally {
+    loading = false
+    if (queued) {
+      const nextChanged = queuedChanged
+      queued = false
+      queuedChanged = false
+      loadCurrent(nextChanged)
+    }
+  }
+}
+
+function loadCurrent(changed) {
+  if (previewType(currentDocPath) === 'image') loadImage(changed)
+  else loadDoc(changed)
+}
+
+let dropped = false
+function connectEvents() {
+  events?.close()
+  dropped = false
+  const eventPath = currentDocPath
+  events = new EventSource(eventsUrl(eventPath))
+  events.addEventListener('change', () => {
+    if (eventPath === currentDocPath) loadCurrent(true)
+  })
+  events.addEventListener('open', () => {
+    if (dropped && eventPath === currentDocPath) location.reload()
+    liveFlag.classList.add('on')
+  })
+  events.addEventListener('error', () => {
+    dropped = true
+    liveFlag.classList.remove('on')
+  })
+}
+
+addEventListener('pagehide', () => {
+  try {
+    sessionStorage.setItem(scrollKey(currentDocPath), String(Math.round(scrollY)))
+  } catch (err) {}
+})
+
+applyTheme()
+connectEvents()
+loadCurrent(false)
+</script>
+</body>
+</html>

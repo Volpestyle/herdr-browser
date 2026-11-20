@@ -45,6 +45,22 @@ class BrowserOpenTests(unittest.TestCase):
                 opener.open_urls(['https://example.test/'], launcher=launcher, app=root/'App.app')
             self.assertLess(calls.index([str(updater), 'install']), calls.index(['/usr/bin/open', str(root/'App.app')]))
 
+    def test_markdown_paths_and_file_urls_route_to_browser_markdown(self):
+        calls = []
+        def run(args, **kwargs):
+            calls.append(args)
+            return subprocess.CompletedProcess(args, 0)
+        targets = ['/tmp/notes.md', 'file:///tmp/README.markdown#intro']
+        with patch.object(opener.subprocess, 'run', side_effect=run):
+            opener.open_urls(targets, launcher='/test/bin/herdr-browser', app='/test/Herdr Browser.app')
+        self.assertEqual(
+            calls[-2:],
+            [
+                ['/test/bin/herdr-browser', 'do', 'browser.markdown', '--path', str(Path('/tmp/notes.md').resolve())],
+                ['/test/bin/herdr-browser', 'do', 'browser.markdown', '--path', 'file:///tmp/README.markdown#intro'],
+            ],
+        )
+
 
 if __name__ == '__main__':
     unittest.main()

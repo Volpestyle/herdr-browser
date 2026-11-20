@@ -8,6 +8,18 @@ import sys
 import time
 
 
+def _markdown_target(url):
+    lower = url.lower()
+    if lower.startswith('file://'):
+        path = url.split('?', 1)[0].split('#', 1)[0]
+        if path.lower().endswith(('.md', '.markdown', '.mdx')):
+            return url
+        return None
+    if '://' not in url and lower.endswith(('.md', '.markdown', '.mdx')):
+        return str(Path(url).expanduser().resolve())
+    return None
+
+
 def open_urls(urls, *, launcher=None, app=None, timeout=15):
     if not urls:
         raise ValueError('Usage: herdr-browser-open <url> [url ...]')
@@ -36,7 +48,11 @@ def open_urls(urls, *, launcher=None, app=None, timeout=15):
                 raise RuntimeError('Herdr Browser did not become ready; run herdr-browser to inspect it.')
             time.sleep(.1)
     for url in urls:
-        subprocess.run([launcher, 'do', 'browser.open', '--url', url], check=True)
+        md_path = _markdown_target(url)
+        if md_path is not None:
+            subprocess.run([launcher, 'do', 'browser.markdown', '--path', md_path], check=True)
+        else:
+            subprocess.run([launcher, 'do', 'browser.open', '--url', url], check=True)
 
 
 if __name__ == '__main__':

@@ -71,6 +71,8 @@ pub enum TerminalEvent {
     Peek(String),
     /// A web link clicked with the link key: a browser tab, or beside this pane with Shift.
     Browse { url: String, beside: bool },
+    /// A local Markdown file link clicked with the link key: opens in the native Markdown viewer.
+    BrowseMarkdown { path: PathBuf, beside: bool },
     TitleChanged,
     SelectionChanged,
     /// History scroll position changed enough for mods that watch `panes().scroll`.
@@ -2564,6 +2566,9 @@ impl Render for TerminalView {
                     match target {
                         LinkTarget::External(links::Target::Url(url)) if url.starts_with("http://") || url.starts_with("https://") => {
                             cx.emit(TerminalEvent::Browse { url, beside: ev.modifiers.shift })
+                        }
+                        LinkTarget::External(links::Target::File(path)) if crate::browser::markdown::is_markdown_path(&path) => {
+                            cx.emit(TerminalEvent::BrowseMarkdown { path, beside: ev.modifiers.shift })
                         }
                         LinkTarget::External(target) => links::open(&target),
                         LinkTarget::Terminal(address) => cx.emit(TerminalEvent::Peek(address)),

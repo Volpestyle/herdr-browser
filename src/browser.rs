@@ -7,6 +7,7 @@ use serde_json::{Value, json};
 use std::cell::Cell;
 use std::rc::Rc;
 
+pub mod markdown;
 #[cfg(target_os = "macos")]
 pub mod cdp;
 #[cfg(target_os = "macos")]
@@ -164,13 +165,29 @@ pub struct Browser {
 
 impl Browser {
     pub fn new(pane: &str, props: &Value, window: &mut Window, cx: &mut Context<Self>) -> Self {
-        let url = address(
-            props
-                .get("url")
-                .and_then(Value::as_str)
-                .unwrap_or("https://www.google.com"),
-        )
-        .unwrap_or_else(|_| "about:blank".into());
+        let (url, initial_title) = match props.get("markdown_path").and_then(Value::as_str) {
+            Some(path) => match markdown::open(path) {
+                Ok(preview) => (preview.url, preview.title),
+                Err(_) => (
+                    props
+                        .get("url")
+                        .and_then(Value::as_str)
+                        .and_then(|u| address(u).ok())
+                        .unwrap_or_else(|| "about:blank".into()),
+                    "Markdown".into(),
+                ),
+            },
+            None => (
+                address(
+                    props
+                        .get("url")
+                        .and_then(Value::as_str)
+                        .unwrap_or("https://www.google.com"),
+                )
+                .unwrap_or_else(|_| "about:blank".into()),
+                "Browser".into(),
+            ),
+        };
         let input =
             cx.new(|cx| InputState::new(window, cx).placeholder("Search or enter an address"));
         input.update(cx, |i, cx| i.set_value(url.clone(), window, cx));
@@ -226,7 +243,7 @@ impl Browser {
             profile,
             input,
             url,
-            title: "Browser".into(),
+            title: initial_title,
             loading: true,
             error,
             notice: None,

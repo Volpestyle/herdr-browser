@@ -1510,6 +1510,14 @@ impl AppWindow {
                     };
                     this.run_as("browser.open", args, true, window, cx);
                 }
+                TerminalEvent::BrowseMarkdown { path, beside } => {
+                    let path_str = path.to_string_lossy().into_owned();
+                    let args = match beside {
+                        true => json!({ "path": path_str, "place": "right", "pane": block.trim_end_matches(SWAP) }),
+                        false => json!({ "path": path_str }),
+                    };
+                    this.run_as("browser.markdown", args, true, window, cx);
+                }
                 TerminalEvent::TitleChanged => this.publish(cx),
                 TerminalEvent::ScrollChanged => {
                     mods::panes_scrolled();
@@ -3074,6 +3082,28 @@ impl AppWindow {
                 };
                 self.answer(result);
             }
+            "browser.markdown" => {
+                let Some(raw_path) = Self::arg(a, "path") else { return self.fail("browser.markdown needs path"); };
+                let place = Self::arg(a, "place");
+                let profile = Self::arg(a, "profile").unwrap_or("person");
+                if !matches!(profile, "person" | "agent") { return self.fail("profile must be person or agent"); }
+                if !person && matches!(place, Some("right" | "down")) && Self::arg(a, "pane").is_none() {
+                    return self.fail("Pass the pane to split explicitly; focused panes are never implicit agent targets");
+                }
+                let preview = match crate::browser::markdown::open(raw_path) {
+                    Ok(preview) => preview,
+                    Err(error) => return self.fail(error),
+                };
+                let props = json!({"url": preview.url, "markdown_path": preview.path, "profile": profile});
+                let tab_name = Self::arg(a, "name").unwrap_or(preview.title.as_str());
+                let result = match place {
+                    Some("right") => self.split_mod(Self::owned(a, "pane"), Axis::Row, crate::browser::MOD.into(), props),
+                    Some("down") => self.split_mod(Self::owned(a, "pane"), Axis::Column, crate::browser::MOD.into(), props),
+                    Some("tab") | None => self.new_mod_tab(Self::owned(a, "space"), tab_name, crate::browser::MOD.into(), props, true),
+                    _ => Err("place must be tab, right, or down".into()),
+                };
+                self.answer(result);
+            }
             "browser.navigate" | "browser.back" | "browser.forward" | "browser.reload" | "browser.focus_url" | "browser.inspect" | "browser.devtools" | "browser.cdp" | "browser.snapshot" | "browser.read" | "browser.click" | "browser.type" | "browser.signin" | "browser.press" | "browser.scroll" | "browser.wait" | "browser.screenshot" | "browser.record" => {
                 let pane = Self::owned(a, "pane").or_else(|| person.then(|| self.model.focused_pane()).flatten());
                 let view = pane.as_ref().and_then(|p| self.copies.get(p)).and_then(|c| c.browser.clone());
@@ -3988,7 +4018,7 @@ impl AppWindow {
                 if name.starts_with("browser.") {
                     let caller = cmd["caller_terminal"].as_str().map(str::to_owned);
                     if !cmd["args"].is_object() { cmd["args"] = json!({}); }
-                    if !matches!(name.as_str(), "browser.open" | "browser.split") && cmd["args"].get("pane").is_none() {
+                    if !matches!(name.as_str(), "browser.open" | "browser.split" | "browser.markdown") && cmd["args"].get("pane").is_none() {
                         let pane = caller.as_ref().and_then(|c| self.browser_openers.get(c));
                         let Some(pane) = pane else {
                             let _ = reply.send(json!({"error":"Pass pane explicitly or open a browser from this terminal first; focused panes are never implicit targets"}));
@@ -4011,7 +4041,7 @@ impl AppWindow {
                         return;
                     }
                     let value = self.control(cmd, window, cx);
-                    if matches!(name.as_str(), "browser.open" | "browser.split") {
+                    if matches!(name.as_str(), "browser.open" | "browser.split" | "browser.markdown") {
                         if let (Some(caller), Some(pane)) = (caller, value["pane"].as_str()) { self.browser_openers.insert(caller, pane.into()); }
                     }
                     let _ = reply.send(value);
