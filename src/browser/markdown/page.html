@@ -424,48 +424,69 @@ article.markdown { max-width: 43rem; margin: 0 auto }
 .diagram-toolbar {
   display: flex;
   flex: 0 0 auto;
+  align-items: center;
   gap: 2px;
-  justify-content: flex-end;
-  padding: 7px 9px;
+  padding: 6px 10px 6px 14px;
   border-bottom: 1px solid var(--rule);
   background: var(--wash);
+}
+.diagram-hint {
+  margin-right: auto;
+  font: 500 11px/1 var(--sans);
+  color: var(--faint);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.diagram-zoom {
+  min-width: 44px;
+  text-align: right;
+  margin-right: 4px;
+  font: 500 11px/1 var(--mono);
+  color: var(--graphite);
+  font-variant-numeric: tabular-nums;
 }
 .diagram-toolbar button {
   display: grid;
   place-items: center;
-  width: 34px;
-  height: 34px;
-  min-width: 34px;
+  width: 32px;
+  height: 32px;
+  min-width: 32px;
   padding: 0;
   border: 0;
-  border-radius: 4px;
+  border-radius: 5px;
   background: transparent;
   color: var(--graphite);
   cursor: pointer;
 }
-.diagram-toolbar button svg { width: 17px; height: 17px; stroke: currentColor }
-.diagram-toolbar button:hover { background: var(--wash); color: var(--ink) }
+.diagram-toolbar button svg { width: 16px; height: 16px; stroke: currentColor }
+.diagram-toolbar button:hover { background: var(--paper); color: var(--ink) }
 .diagram-viewport {
   position: relative;
   overflow: hidden;
   touch-action: none;
   cursor: grab;
-  padding: 24px;
-  max-height: 70vh;
+  height: min(64vh, 520px);
   user-select: none;
   overscroll-behavior: contain;
 }
 .diagram-viewport.dragging { cursor: grabbing }
-.diagram-canvas { width: fit-content; margin: 0 auto; transform-origin: center center; will-change: transform }
-.diagram-canvas svg { display: block; pointer-events: none }
-.image-diagram .diagram-viewport { height: min(70vh, 640px); max-height: none }
-.image-diagram .diagram-canvas { position: absolute; top: 50%; left: 50%; margin: 0 }
+.diagram-canvas {
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  margin: 0;
+  width: fit-content;
+  transform-origin: center center;
+  will-change: transform;
+}
+.diagram-canvas svg { display: block; max-width: none !important; pointer-events: none }
+.image-diagram .diagram-viewport { height: min(70vh, 640px) }
 .image-diagram .diagram-canvas img { max-width: none; border: 0; border-radius: 0; pointer-events: none; user-select: none }
-.diagram:fullscreen { display: flex; width: 100%; height: 100%; flex-direction: column; border: 0; border-radius: 0; background: var(--paper) }
-.diagram:fullscreen .diagram-toolbar { padding: 10px 14px }
-.diagram:fullscreen .diagram-viewport { flex: 1; min-height: 0; max-height: none }
-.image-diagram:fullscreen .diagram-viewport { height: auto }
-.diagram-error { font: 400 12.5px/1.6 var(--mono); color: var(--alarm-fg) }
+.diagram:fullscreen { display: flex; width: 100%; height: 100%; flex-direction: column; border: 0; border-radius: 0; background: var(--canvas) }
+.diagram:fullscreen .diagram-toolbar { padding: 10px 16px }
+.diagram:fullscreen .diagram-viewport { flex: 1; height: auto !important; min-height: 0; max-height: none }
+.diagram-error { padding: 20px; font: 400 12.5px/1.6 var(--mono); color: var(--alarm-fg) }
 .diagram-error pre { margin: 10px 0 0 }
 #doc.loading { font: 400 13px/1 var(--mono); color: var(--faint) }
 @media (max-width: 719px) {
@@ -977,23 +998,60 @@ function upgradeCodeBlocks() {
 function applyView(figure) {
   const view = diagramViews.get(figure)
   const canvas = figure.querySelector('.diagram-canvas')
-  const center = figure.classList.contains('image-diagram') ? 'translate(-50%, -50%) ' : ''
-  canvas.style.transform = center + 'translate(' + view.x + 'px, ' + view.y + 'px) scale(' + view.scale + ')'
+  canvas.style.transform = 'translate(-50%, -50%) translate(' + view.x + 'px, ' + view.y + 'px) scale(' + view.scale + ')'
+  const readout = figure.querySelector('.diagram-zoom')
+  if (readout) readout.textContent = Math.round(view.scale * 100) + '%'
 }
 
 function measureDiagram(figure) {
   const view = diagramViews.get(figure)
   const canvas = figure.querySelector('.diagram-canvas')
-  canvas.style.transform = 'none'
+  const svg = canvas.querySelector('svg')
+  if (svg) {
+    const vb = svg.viewBox?.baseVal
+    let w = vb && vb.width > 0 ? vb.width : 0
+    let h = vb && vb.height > 0 ? vb.height : 0
+    if (!w || !h) {
+      const attr = svg.getAttribute('viewBox')?.trim().split(/[\s,]+/).map(Number)
+      if (attr?.length === 4 && attr[2] > 0 && attr[3] > 0) {
+        w = attr[2]
+        h = attr[3]
+      }
+    }
+    if (w > 0 && h > 0) {
+      svg.setAttribute('width', String(w))
+      svg.setAttribute('height', String(h))
+      svg.style.width = w + 'px'
+      svg.style.height = h + 'px'
+      svg.style.maxWidth = 'none'
+      view.width = w
+      view.height = h
+      return
+    }
+  }
+  canvas.style.transform = 'translate(-50%, -50%)'
   view.width = Math.max(1, canvas.offsetWidth)
   view.height = Math.max(1, canvas.offsetHeight)
+}
+
+function sizeInlineViewport(figure) {
+  if (document.fullscreenElement === figure || figure.classList.contains('image-diagram')) return
+  const view = diagramViews.get(figure)
+  const viewport = figure.querySelector('.diagram-viewport')
+  const availW = Math.max(240, viewport.clientWidth - 48)
+  const fitW = Math.min(1.25, availW / view.width)
+  const desiredH = Math.round(view.height * fitW + 56)
+  const maxH = Math.round(window.innerHeight * 0.68)
+  const clamped = Math.max(240, Math.min(maxH, desiredH))
+  viewport.style.height = clamped + 'px'
+  view.inlineHeight = viewport.style.height
 }
 
 function clampView(figure) {
   const view = diagramViews.get(figure)
   const viewport = figure.querySelector('.diagram-viewport')
-  const limitX = Math.max(0, (view.width * view.scale - viewport.clientWidth) / 2 + 40)
-  const limitY = Math.max(0, (view.height * view.scale - viewport.clientHeight) / 2 + 40)
+  const limitX = Math.max(0, (view.width * view.scale - viewport.clientWidth) / 2 + 64)
+  const limitY = Math.max(0, (view.height * view.scale - viewport.clientHeight) / 2 + 64)
   view.x = Math.max(-limitX, Math.min(limitX, view.x))
   view.y = Math.max(-limitY, Math.min(limitY, view.y))
 }
@@ -1001,8 +1059,12 @@ function clampView(figure) {
 function fitView(figure) {
   const view = diagramViews.get(figure)
   const viewport = figure.querySelector('.diagram-viewport')
-  const padding = document.fullscreenElement === figure ? 64 : 48
-  view.fitScale = Math.min(1, Math.max(1, viewport.clientWidth - padding) / view.width, Math.max(1, viewport.clientHeight - padding) / view.height)
+  const fullscreen = document.fullscreenElement === figure
+  const padding = fullscreen ? 72 : 44
+  const maxFit = fullscreen ? 4 : figure.classList.contains('image-diagram') ? 1 : 1.25
+  const scaleX = Math.max(1, viewport.clientWidth - padding) / view.width
+  const scaleY = Math.max(1, viewport.clientHeight - padding) / view.height
+  view.fitScale = Math.min(maxFit, scaleX, scaleY)
   view.scale = view.fitScale
   view.x = 0
   view.y = 0
@@ -1013,11 +1075,11 @@ function fitView(figure) {
 function zoomAt(figure, factor, cx, cy) {
   const view = diagramViews.get(figure)
   const viewport = figure.querySelector('.diagram-viewport')
-  const canvas = figure.querySelector('.diagram-canvas')
-  const nextScale = Math.min(6, Math.max(view.fitScale * 0.5, view.scale * factor))
+  const maxScale = Math.max(8, view.fitScale * 4)
+  const nextScale = Math.min(maxScale, Math.max(view.fitScale * 0.4, view.scale * factor))
   const applied = nextScale / view.scale
-  const offsetX = figure.classList.contains('image-diagram') ? cx - viewport.clientWidth / 2 : cx - canvas.offsetLeft - canvas.offsetWidth / 2
-  const offsetY = figure.classList.contains('image-diagram') ? cy - viewport.clientHeight / 2 : cy - canvas.offsetTop - canvas.offsetHeight / 2
+  const offsetX = cx - viewport.clientWidth / 2
+  const offsetY = cy - viewport.clientHeight / 2
   view.x = offsetX - (offsetX - view.x) * applied
   view.y = offsetY - (offsetY - view.y) * applied
   view.scale = nextScale
@@ -1125,28 +1187,34 @@ function buildDiagramShell(source, contentLabel = 'diagram') {
   if (source != null) figure.dataset.source = source
   const toolbar = document.createElement('div')
   toolbar.className = 'diagram-toolbar'
+  const hint = document.createElement('span')
+  hint.className = 'diagram-hint'
+  hint.textContent = 'Drag to pan · ⌘/Ctrl + scroll to zoom · double-click to zoom'
+  const zoomReadout = document.createElement('span')
+  zoomReadout.className = 'diagram-zoom'
+  zoomReadout.textContent = '100%'
+  toolbar.append(hint, zoomReadout)
   const viewport = document.createElement('div')
   viewport.className = 'diagram-viewport'
   viewport.tabIndex = 0
   viewport.setAttribute('aria-label', 'Interactive ' + contentLabel + '. Drag to pan, use Control or Command plus scroll to zoom, and press 0 to fit.')
-  viewport.title = 'Drag to pan · Ctrl/⌘ + scroll to zoom · double-click to zoom'
   const canvas = document.createElement('div')
   canvas.className = 'diagram-canvas'
   viewport.append(canvas)
   const center = () => ({ x: viewport.clientWidth / 2, y: viewport.clientHeight / 2 })
   diagramButton(toolbar, 'zoomOut', 'Zoom out', () => {
     const c = center()
-    zoomAt(figure, 1 / 1.2, c.x, c.y)
+    zoomAt(figure, 1 / 1.25, c.x, c.y)
   })
   diagramButton(toolbar, 'zoomIn', 'Zoom in', () => {
     const c = center()
-    zoomAt(figure, 1.2, c.x, c.y)
+    zoomAt(figure, 1.25, c.x, c.y)
   })
   diagramButton(toolbar, 'fit', 'Fit diagram', () => fitView(figure))
   const fullscreenButton = diagramButton(toolbar, 'fullscreen', 'Enter fullscreen', () => toggleFullscreen(figure))
   fullscreenButton.dataset.action = 'fullscreen'
   figure.append(toolbar, viewport)
-  diagramViews.set(figure, { scale: 1, x: 0, y: 0, fitScale: 1, width: 1, height: 1, atFit: true, fullscreen: false, normal: null })
+  diagramViews.set(figure, { scale: 1, x: 0, y: 0, fitScale: 1, width: 1, height: 1, atFit: true, fullscreen: false, normal: null, inlineHeight: '' })
   wirePanZoom(figure, viewport)
   return figure
 }
@@ -1163,14 +1231,20 @@ document.addEventListener('fullscreenchange', () => {
       if (!view.normal) view.normal = { scale: view.scale, x: view.x, y: view.y, fitScale: view.fitScale, atFit: view.atFit }
       view.fullscreen = true
       viewport.style.height = ''
-      requestAnimationFrame(() => fitView(figure))
+      requestAnimationFrame(() => requestAnimationFrame(() => fitView(figure)))
     } else if (view.fullscreen) {
       view.fullscreen = false
+      if (view.inlineHeight) viewport.style.height = view.inlineHeight
       requestAnimationFrame(() => {
-        Object.assign(view, view.normal)
-        view.normal = null
-        clampView(figure)
-        applyView(figure)
+        if (view.normal) {
+          Object.assign(view, view.normal)
+          view.normal = null
+        }
+        if (view.atFit) fitView(figure)
+        else {
+          clampView(figure)
+          applyView(figure)
+        }
       })
     }
   }
@@ -1184,6 +1258,7 @@ addEventListener('resize', () => {
     diagramResizeTick = false
     for (const figure of diagrams) {
       const view = diagramViews.get(figure)
+      sizeInlineViewport(figure)
       if (view.atFit) fitView(figure)
       else {
         clampView(figure)
@@ -1194,11 +1269,50 @@ addEventListener('resize', () => {
 })
 
 function configureMermaid(mermaid) {
+  const dark = effectiveTheme() === 'dark'
   mermaid.initialize({
     startOnLoad: false,
     securityLevel: 'loose',
-    theme: effectiveTheme() === 'dark' ? 'dark' : 'neutral',
-    fontFamily: "'IBM Plex Mono', Menlo, monospace",
+    theme: 'base',
+    fontFamily: "'Manrope', -apple-system, BlinkMacSystemFont, sans-serif",
+    flowchart: { useMaxWidth: false, htmlLabels: true, padding: 14, nodeSpacing: 36, rankSpacing: 44 },
+    themeVariables: dark ? {
+      darkMode: true,
+      background: '#191b17',
+      primaryColor: '#252922',
+      primaryTextColor: '#edebe3',
+      primaryBorderColor: '#88b9aa',
+      secondaryColor: '#20231d',
+      secondaryTextColor: '#edebe3',
+      secondaryBorderColor: '#4a5248',
+      tertiaryColor: '#1f221c',
+      tertiaryTextColor: '#edebe3',
+      tertiaryBorderColor: '#3a3f36',
+      lineColor: '#88b9aa',
+      textColor: '#edebe3',
+      clusterBkg: '#1d201a',
+      clusterBorder: '#43493e',
+      edgeLabelBackground: '#191b17',
+      fontSize: '14px',
+    } : {
+      darkMode: false,
+      background: '#fffefa',
+      primaryColor: '#f4f3ed',
+      primaryTextColor: '#252722',
+      primaryBorderColor: '#2f6b5c',
+      secondaryColor: '#efede5',
+      secondaryTextColor: '#252722',
+      secondaryBorderColor: '#92978c',
+      tertiaryColor: '#f8f7f2',
+      tertiaryTextColor: '#252722',
+      tertiaryBorderColor: '#dedfd7',
+      lineColor: '#2f6b5c',
+      textColor: '#252722',
+      clusterBkg: '#f7f6f0',
+      clusterBorder: '#cfcfc4',
+      edgeLabelBackground: '#fffefa',
+      fontSize: '14px',
+    },
   })
 }
 
@@ -1209,6 +1323,7 @@ async function drawDiagram(mermaid, figure) {
     const rendered = await mermaid.render(id, figure.dataset.source)
     canvas.innerHTML = rendered.svg
     measureDiagram(figure)
+    sizeInlineViewport(figure)
     fitView(figure)
   } catch (err) {
     document.getElementById('d' + id)?.remove()
@@ -1221,6 +1336,7 @@ async function drawDiagram(mermaid, figure) {
     box.append(message, source)
     canvas.replaceChildren(box)
     measureDiagram(figure)
+    sizeInlineViewport(figure)
     fitView(figure)
   }
 }
