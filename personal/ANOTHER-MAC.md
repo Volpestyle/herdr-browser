@@ -1,7 +1,7 @@
 # Herdr Browser on another Mac
 
 This build targets macOS on Apple silicon. The source is maintained in
-`Volpestyle/herdr-app` on `james/native-browser`. The optional appearance profile
+`Volpestyle/herdr-browser` on `james/native-browser`. The optional appearance profile
 is maintained separately in the private `Volpestyle/dotfiles` repository under
 `config/herdr-app-browser`.
 
@@ -41,7 +41,7 @@ personal agent accounts on the work Mac. Reuse existing clones when present.
 ```sh
 git clone git@github.com:Volpestyle/dotfiles.git ~/dotfiles
 git clone --branch james/native-browser --recurse-submodules \
-  https://github.com/Volpestyle/herdr-app.git ~/dev/herdr-app-browser
+  https://github.com/Volpestyle/herdr-browser.git ~/dev/herdr-app-browser
 python3 ~/dotfiles/scripts/herdr-browser-setup.py
 python3 ~/dotfiles/scripts/herdr-browser-setup.py --apply
 python3 ~/dev/herdr-app-browser/personal/browser_update.py install

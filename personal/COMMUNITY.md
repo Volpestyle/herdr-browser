@@ -45,7 +45,7 @@ Linear in it, including Google sign-in. There's also a local updater that
 reapplies the patch to Herdr releases and builds stable CEF updates, keeping
 the installed version when a build or patch fails.
 
-Source: https://github.com/Volpestyle/herdr-app
+Source: https://github.com/Volpestyle/herdr-browser
 
 I saw the earlier herdr-browser work and penso's native client. This version
 keeps the official desktop app as its base and uses Chromium on macOS. Would

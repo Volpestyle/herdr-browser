@@ -5,7 +5,7 @@ Open `~/Applications/Herdr Browser.app`, then choose **+ → Browser**. The
 stock installation. Native Chromium is integrated through CEF in Herdr's
 Rust/GPUI shell.
 
-Source: [Volpestyle/herdr-app](https://github.com/Volpestyle/herdr-app),
+Source: [Volpestyle/herdr-browser](https://github.com/Volpestyle/herdr-browser),
 branch `james/native-browser`. Optional appearance and keyboard customizations
 are maintained in the private `Volpestyle/dotfiles` repository under
 `config/herdr-app-browser`. See [moving to another Mac](ANOTHER-MAC.md).
@@ -202,7 +202,7 @@ and all helpers. These declarations permit normal macOS permission prompts;
 they do not grant a website access. Other authentication paths have not all
 been exercised. Physical keyboard
 shortcuts and comparative CPU/GPU performance have not been benchmarked.
-The [extension runtime PR](https://github.com/Volpestyle/herdr-app/pull/1)
+The [extension runtime PR](https://github.com/Volpestyle/herdr-browser/pull/1)
 reports successful 1Password installation and its inline menu in browser panes.
 
 ## Current limits

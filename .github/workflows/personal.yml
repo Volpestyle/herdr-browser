@@ -12,7 +12,7 @@ permissions:
 
 jobs:
   updater:
-    if: github.repository == 'Volpestyle/herdr-app'
+    if: github.repository == 'Volpestyle/herdr-browser'
     runs-on: ubuntu-24.04
     timeout-minutes: 2
     steps:
