@@ -11,164 +11,218 @@ try {
   document.documentElement.dataset.theme = dark ? 'dark' : 'light'
 } catch (e) {}
 </script>
-<link rel="preconnect" href="https://fonts.googleapis.com">
-<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:ital,wght@0,400;0,500;1,400&family=Literata:ital,opsz,wght@0,7..72,400..700;1,7..72,400..700&family=Manrope:wght@500;600;700&display=swap">
-<link rel="stylesheet" id="hl-light" href="https://cdn.jsdelivr.net/npm/@highlightjs/cdn-assets@11/styles/stackoverflow-light.min.css">
-<link rel="stylesheet" id="hl-dark" href="https://cdn.jsdelivr.net/npm/@highlightjs/cdn-assets@11/styles/stackoverflow-dark.min.css" disabled>
+<link rel="stylesheet" id="hl-light" href="https://cdn.jsdelivr.net/npm/@highlightjs/cdn-assets@11/styles/github.min.css">
+<link rel="stylesheet" id="hl-dark" href="https://cdn.jsdelivr.net/npm/@highlightjs/cdn-assets@11/styles/github-dark-dimmed.min.css" disabled>
 <style>
 :root {
   color-scheme: light;
-  --canvas: #f2f0ea;
-  --paper: #fffefa;
-  --ink: #252722;
-  --graphite: #666a61;
-  --faint: #92978c;
-  --rule: #dedfd7;
-  --wash: #f4f3ed;
-  --draft: #2f6b5c;
-  --live: #2e7d46;
-  --alarm-fg: #a8402f;
-  --alarm-bg: #fbf1ef;
-  --alarm-rule: #edcfc9;
-  --alert-note: #2b6cb0;
-  --alert-tip: #2e7d46;
-  --alert-important: #6b46c1;
-  --alert-warning: #b7791f;
-  --alert-caution: #a8402f;
-  --shadow: 0 1px 0 rgba(37, 39, 34, .03), 0 28px 70px rgba(37, 39, 34, .08);
-  --serif: 'Literata', Georgia, 'Times New Roman', serif;
-  --sans: 'Manrope', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
-  --mono: 'IBM Plex Mono', ui-monospace, SFMono-Regular, Menlo, monospace;
-  --slug-h: 56px;
+  --canvas: #ffffff;
+  --chrome: #ffffff;
+  --paper: #fafbfc;
+  --surface: #f4f5f7;
+  --raised: #eef0f3;
+  --hover: rgba(0, 0, 0, .04);
+  --selected: rgba(0, 0, 0, .065);
+  --toc-active: #f4f5f7;
+  --pill-shadow: 0 2px 16px rgba(0, 0, 0, .06), 0 1px 2px rgba(0, 0, 0, .03);
+  --ink: #18191c;
+  --body: #2d3036;
+  --graphite: #656a74;
+  --faint: #8e94a0;
+  --rule: rgba(0, 0, 0, .085);
+  --wash: #f5f6f8;
+  --draft: #1f62d0;
+  --live: #1a7f37;
+  --selection: rgba(31, 98, 208, .15);
+  --alarm-fg: #c93c2c;
+  --alarm-bg: rgba(201, 60, 44, .07);
+  --alarm-rule: rgba(201, 60, 44, .22);
+  --alert-note: #1f62d0;
+  --alert-tip: #1a7f37;
+  --alert-important: #7a45c8;
+  --alert-warning: #9a6700;
+  --alert-caution: #c93c2c;
+  --sans: -apple-system, BlinkMacSystemFont, 'SF Pro Text', 'Inter', 'Segoe UI', system-ui, sans-serif;
+  --mono: ui-monospace, 'SF Mono', 'JetBrains Mono', SFMono-Regular, Menlo, monospace;
+  --slug-h: 46px;
 }
 :root[data-theme="dark"] {
   color-scheme: dark;
-  --canvas: #111310;
-  --paper: #191b17;
-  --ink: #edebe3;
-  --graphite: #adb0a7;
-  --faint: #777b73;
-  --rule: #2e312b;
-  --wash: #22251f;
-  --draft: #88b9aa;
-  --live: #5cad74;
-  --alarm-fg: #e5776a;
-  --alarm-bg: #2a1917;
-  --alarm-rule: #4e2620;
-  --alert-note: #63b3ed;
-  --alert-tip: #5cad74;
-  --alert-important: #b794f4;
-  --alert-warning: #ecc94b;
-  --alert-caution: #e5776a;
-  --shadow: 0 1px 0 rgba(255, 255, 255, .02), 0 28px 75px rgba(0, 0, 0, .3);
+  --canvas: #131518;
+  --chrome: #181a1f;
+  --paper: #17191d;
+  --surface: #1c1f25;
+  --raised: #242830;
+  --hover: rgba(255, 255, 255, .055);
+  --selected: rgba(255, 255, 255, .09);
+  --toc-active: rgba(255, 255, 255, .065);
+  --pill-shadow: 0 6px 24px rgba(0, 0, 0, .32), 0 1px 0 rgba(255, 255, 255, .04) inset;
+  --ink: #f0f1f3;
+  --body: #cfd3da;
+  --graphite: #8e939e;
+  --faint: #616670;
+  --rule: rgba(255, 255, 255, .085);
+  --wash: #1a1d22;
+  --draft: #96b2d7;
+  --live: #a6bd91;
+  --selection: #394454;
+  --alarm-fg: #f0705f;
+  --alarm-bg: rgba(240, 112, 95, .1);
+  --alarm-rule: rgba(240, 112, 95, .28);
+  --alert-note: #96b2d7;
+  --alert-tip: #a6bd91;
+  --alert-important: #b5a2ce;
+  --alert-warning: #e5c07b;
+  --alert-caution: #f0705f;
 }
 * { box-sizing: border-box }
-html { -webkit-text-size-adjust: 100%; scrollbar-color: var(--rule) transparent; scrollbar-gutter: stable }
+html {
+  -webkit-text-size-adjust: 100%;
+  scrollbar-color: var(--rule) transparent;
+  scrollbar-width: thin;
+  scrollbar-gutter: stable;
+}
 body {
   margin: 0;
   background: var(--canvas);
-  color: var(--ink);
-  font: 400 17px/1.76 var(--serif);
-  font-optical-sizing: auto;
+  color: var(--body);
+  font: 400 15.5px/1.78 var(--sans);
+  -webkit-font-smoothing: antialiased;
   text-rendering: optimizeLegibility;
 }
-::selection { background: color-mix(in srgb, var(--draft) 18%, transparent) }
+body::before {
+  content: '';
+  position: fixed;
+  top: 0;
+  left: 0;
+  right: 0;
+  height: 28px;
+  z-index: 15;
+  pointer-events: none;
+  background: linear-gradient(to bottom, var(--canvas) 15%, transparent);
+}
+::selection { background: var(--selection) }
 button {
   font-family: var(--sans);
   color: inherit;
 }
-:focus-visible { outline: 2px solid var(--draft); outline-offset: 3px }
+:focus-visible { outline: 1.5px solid var(--draft); outline-offset: 2px }
 #slug {
   position: sticky;
-  top: 0;
+  top: 14px;
   z-index: 20;
   display: flex;
   align-items: center;
   justify-content: space-between;
-  gap: 20px;
+  gap: 16px;
+  max-width: min(1060px, calc(100% - 32px));
   height: var(--slug-h);
-  padding: 0 28px;
-  background: color-mix(in srgb, var(--paper) 88%, transparent);
-  backdrop-filter: blur(14px) saturate(1.2);
-  border-bottom: 1px solid var(--rule);
-  font: 500 11.5px/1 var(--sans);
+  margin: 14px auto 0;
+  padding: 0 8px 0 12px;
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--chrome) 76%, transparent);
+  backdrop-filter: blur(20px) saturate(1.3);
+  border: 1px solid var(--rule);
+  box-shadow: var(--pill-shadow);
+  font: 500 12.5px/1 var(--sans);
   color: var(--graphite);
 }
 #doc-name {
-  font-weight: 600;
-  letter-spacing: -.01em;
+  font-weight: 500;
+  color: var(--ink);
+  letter-spacing: -.012em;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
-#slug-left { display: flex; align-items: center; min-width: 0; gap: 12px }
+#slug-left { display: flex; align-items: center; min-width: 0; gap: 8px }
 #explorer-toggle, #explorer-close {
   flex: none;
   display: grid;
   place-items: center;
-  width: 32px;
-  height: 32px;
+  width: 28px;
+  height: 28px;
   padding: 0;
   border: 0;
-  border-radius: 5px;
+  border-radius: 999px;
   background: transparent;
   color: var(--graphite);
   cursor: pointer;
+  transition: background .12s, color .12s;
 }
-#explorer-toggle svg, #explorer-close svg { width: 17px; height: 17px; stroke: currentColor }
-#explorer-toggle:hover, #explorer-close:hover { background: var(--wash); color: var(--ink) }
-#slug-right { display: flex; align-items: center; gap: 18px; white-space: nowrap }
-#doc-stats, #saved-at { color: var(--faint) }
-#live-flag { display: inline-flex; align-items: center; gap: 6px; color: var(--faint) }
+#explorer-toggle svg, #explorer-close svg { width: 15px; height: 15px; stroke: currentColor }
+#explorer-toggle:hover, #explorer-close:hover { background: var(--hover); color: var(--ink) }
+#slug-right { display: flex; align-items: center; gap: 12px; white-space: nowrap; font-size: 11.5px }
+#doc-stats, #saved-at { color: var(--faint); font-variant-numeric: tabular-nums }
+#live-flag {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  color: var(--faint);
+}
 #live-flag::before {
   content: '';
-  width: 6px;
-  height: 6px;
+  width: 5px;
+  height: 5px;
   border-radius: 50%;
   background: var(--faint);
   transition: background .3s;
 }
 #live-flag.on { color: var(--graphite) }
 #live-flag.on::before { background: var(--live) }
-#theme-btn {
-  font-size: 10.5px;
-  font-weight: 600;
-  line-height: 1;
-  padding: 8px 12px;
-  min-width: 90px;
-  border: 1px solid var(--rule);
+#theme-switch {
+  display: inline-flex;
+  align-items: center;
+  padding: 2px;
   border-radius: 999px;
-  background: var(--paper);
-  color: var(--graphite);
-  cursor: pointer;
-  transition: border-color .15s, color .15s, background .15s;
+  border: 1px solid var(--rule);
+  background: var(--hover);
 }
-#theme-btn:hover { border-color: var(--faint); color: var(--ink); background: var(--wash) }
+#theme-switch button {
+  height: 24px;
+  padding: 0 9px;
+  border: 0;
+  border-radius: 999px;
+  background: transparent;
+  color: var(--faint);
+  font-size: 11px;
+  font-weight: 500;
+  line-height: 1;
+  cursor: pointer;
+  transition: background .14s, color .14s;
+}
+#theme-switch button:hover { color: var(--ink) }
+#theme-switch button[aria-pressed="true"] {
+  background: var(--raised);
+  color: var(--ink);
+}
 #banner {
   position: sticky;
-  top: var(--slug-h);
+  top: calc(var(--slug-h) + 22px);
   z-index: 19;
-  padding: 10px 22px;
+  max-width: min(1060px, calc(100% - 32px));
+  margin: 10px auto 0;
+  padding: 9px 16px;
+  border-radius: 10px;
   font: 400 12px/1.5 var(--mono);
   background: var(--alarm-bg);
   color: var(--alarm-fg);
-  border-bottom: 1px solid var(--alarm-rule);
+  border: 1px solid var(--alarm-rule);
 }
 #explorer {
   position: fixed;
   z-index: 40;
-  top: var(--slug-h);
+  top: 0;
   bottom: 0;
   left: 0;
   display: flex;
-  width: min(340px, calc(100vw - 40px));
+  width: min(300px, calc(100vw - 40px));
   flex-direction: column;
-  background: var(--paper);
+  background: var(--chrome);
   border-right: 1px solid var(--rule);
-  box-shadow: 18px 0 55px rgba(20, 24, 20, .14);
+  box-shadow: 16px 0 48px rgba(0, 0, 0, .3);
   transform: translateX(-102%);
-  transition: transform .2s cubic-bezier(.2, .7, .3, 1);
+  transition: transform .18s cubic-bezier(.2, .7, .3, 1);
 }
 body.explorer-open { overflow: hidden }
 body.explorer-open #explorer { transform: translateX(0) }
@@ -176,104 +230,113 @@ body.explorer-open #explorer { transform: translateX(0) }
   display: flex;
   align-items: center;
   justify-content: space-between;
-  gap: 16px;
-  padding: 18px 16px 14px 20px;
+  gap: 12px;
+  padding: 14px 12px 12px 16px;
   border-bottom: 1px solid var(--rule);
 }
 #explorer-title { min-width: 0 }
-#explorer-title strong { display: block; font: 600 13px/1.2 var(--sans); color: var(--ink) }
-#explorer-title span { display: block; margin-top: 4px; overflow: hidden; color: var(--faint); font: 400 10.5px/1.3 var(--mono); text-overflow: ellipsis; white-space: nowrap }
-#file-tree { flex: 1; overflow: auto; padding: 12px 10px 40px }
+#explorer-title strong { display: block; font: 600 12.5px/1.2 var(--sans); color: var(--ink) }
+#explorer-title span { display: block; margin-top: 3px; overflow: hidden; color: var(--faint); font: 400 10.5px/1.3 var(--mono); text-overflow: ellipsis; white-space: nowrap }
+#file-tree { flex: 1; overflow: auto; padding: 8px 8px 32px }
 .tree-directory { margin: 1px 0 }
 .tree-directory > summary, .tree-file {
   display: block;
   width: 100%;
-  padding: 7px 10px;
-  border-radius: 5px;
+  padding: 6px 9px;
+  border-radius: 7px;
   color: var(--graphite);
-  font: 500 12px/1.35 var(--sans);
+  font: 400 12.5px/1.4 var(--sans);
   text-decoration: none;
   cursor: pointer;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
-.tree-directory > summary { display: list-item; font-weight: 600 }
-.tree-directory > summary:hover, .tree-file:not(.tree-static):hover { background: var(--wash); color: var(--ink) }
-.tree-file.active { background: color-mix(in srgb, var(--draft) 10%, transparent); color: var(--draft) }
+.tree-directory > summary { display: list-item; font-weight: 500 }
+.tree-directory > summary:hover, .tree-file:not(.tree-static):hover { background: var(--hover); color: var(--ink) }
+.tree-file.active { background: var(--selected); color: var(--ink); font-weight: 500 }
 .tree-file.tree-static { color: var(--faint); cursor: default }
-.tree-children { margin: 2px 0 4px 10px; padding-left: 8px; border-left: 1px solid var(--rule) }
+.tree-children { margin: 2px 0 3px 9px; padding-left: 8px; border-left: 1px solid var(--rule) }
 .tree-message { padding: 8px 10px; color: var(--faint); font: 400 11px/1.5 var(--sans) }
 #explorer-scrim {
   position: fixed;
   z-index: 39;
-  inset: var(--slug-h) 0 0;
+  inset: 0;
   border: 0;
-  background: rgba(15, 18, 15, .24);
+  background: rgba(0, 0, 0, .4);
   opacity: 0;
   pointer-events: none;
-  transition: opacity .2s;
+  transition: opacity .18s;
 }
 body.explorer-open #explorer-scrim { opacity: 1; pointer-events: auto }
 #layout {
   display: grid;
   grid-template-columns: minmax(0, 1fr);
-  max-width: 51rem;
+  max-width: 48rem;
   margin: 0 auto;
-  padding: 48px 28px 120px;
+  padding: 40px 28px 128px;
 }
-#toc-aside { min-width: 0; margin-bottom: 34px }
+#toc-aside { min-width: 0; margin-bottom: 32px }
 #toc summary {
-  font: 700 10.5px/1 var(--sans);
-  letter-spacing: .14em;
+  font: 600 11px/1 var(--sans);
+  letter-spacing: .08em;
   text-transform: uppercase;
   color: var(--faint);
   cursor: pointer;
   user-select: none;
+  padding: 4px 14px;
 }
-#toc-nav { display: flex; flex-direction: column; gap: 3px; margin-top: 16px }
-#toc-nav a {
+#toc-nav {
   display: flex;
-  gap: 10px;
-  font: 500 12.5px/1.45 var(--sans);
+  flex-direction: column;
+  gap: 2px;
+  margin-top: 8px;
+}
+#toc-nav a {
+  display: block;
+  font: 400 13px/1.48 var(--sans);
   color: var(--graphite);
   text-decoration: none;
-  padding: 5px 10px;
-  border-radius: 6px;
-  transition: color .15s, background .15s;
+  padding: 8px 14px;
+  border-radius: 10px;
+  transition: color .14s, background .14s;
 }
-#toc-nav a:hover { color: var(--ink); background: var(--wash) }
-#toc-nav a.active { color: var(--draft); background: color-mix(in srgb, var(--draft) 8%, transparent) }
-#toc-nav a.active .toc-num { color: var(--draft) }
-.toc-num { font: 400 11px/1.7 var(--mono); color: var(--faint); min-width: 2.6ch }
-#toc-nav a.toc-l2 { padding-left: 18px }
-#toc-nav a.toc-l3 { padding-left: 36px }
+#toc-nav a:hover { color: var(--ink) }
+#toc-nav a.active {
+  background: var(--toc-active);
+  color: var(--ink);
+  font-weight: 500;
+}
+#toc-nav a.toc-l2 { padding-left: 14px }
+#toc-nav a.toc-l3 { padding-left: 26px; font-size: 12.5px; color: var(--faint) }
+#toc-nav a.toc-l3:hover, #toc-nav a.toc-l3.active { color: var(--ink) }
 main {
   min-width: 0;
-  padding: 60px 64px 96px;
-  background: var(--paper);
-  border: 1px solid var(--rule);
-  border-radius: 16px;
-  box-shadow: var(--shadow);
+  padding: 0;
+  background: transparent;
+  border: 0;
+  border-radius: 0;
+  box-shadow: none;
 }
-@media (min-width: 1120px) {
-  #layout { grid-template-columns: 236px minmax(0, 1fr); gap: 64px; max-width: 78rem }
-  #layout:has(> #toc-aside[hidden]) { grid-template-columns: minmax(0, 1fr); gap: 0; max-width: 58.75rem }
+@media (min-width: 1060px) {
+  #layout { grid-template-columns: 244px minmax(0, 1fr); gap: 84px; max-width: 74rem; padding: 52px 44px 140px }
+  #layout:has(> #toc-aside[hidden]) { grid-template-columns: minmax(0, 1fr); gap: 0; max-width: 48rem }
   #toc-aside { margin-bottom: 0 }
   #toc {
     position: sticky;
-    top: calc(var(--slug-h) + 44px);
-    max-height: calc(100vh - var(--slug-h) - 88px);
+    top: calc(var(--slug-h) + 48px);
+    max-height: calc(100vh - var(--slug-h) - 80px);
     overflow: auto;
+    padding-right: 4px;
   }
-  #toc summary { pointer-events: none; list-style: none }
-  #toc summary::-webkit-details-marker { display: none }
+  #toc summary { display: none }
+  #toc-nav { margin-top: 0 }
 }
-article.markdown { max-width: 43rem; margin: 0 auto }
+article.markdown { max-width: 44rem; margin: 0 auto }
 @media (prefers-reduced-motion: no-preference) {
-  .markdown.rise { animation: rise .45s cubic-bezier(.2, .7, .3, 1) both }
+  .markdown.rise { animation: rise .28s cubic-bezier(.2, .7, .3, 1) both }
   @keyframes rise {
-    from { opacity: 0; transform: translateY(8px) }
+    from { opacity: 0; transform: translateY(4px) }
     to { opacity: 1; transform: none }
   }
 }
@@ -281,60 +344,54 @@ article.markdown { max-width: 43rem; margin: 0 auto }
 .markdown > :first-child { margin-top: 0 }
 .markdown h1, .markdown h2, .markdown h3, .markdown h4, .markdown h5, .markdown h6 {
   font-family: var(--sans);
+  color: var(--ink);
   font-weight: 600;
-  line-height: 1.15;
-  margin: 2.5em 0 .68em;
-  scroll-margin-top: calc(var(--slug-h) + 28px);
+  line-height: 1.24;
+  margin: 2.35em 0 .75em;
+  scroll-margin-top: calc(var(--slug-h) + 38px);
 }
 .markdown h1 {
-  font-size: clamp(2.1rem, 4.5vw, 2.9rem);
+  font-size: clamp(1.95rem, 3.6vw, 2.5rem);
   font-weight: 600;
-  letter-spacing: -.04em;
-  line-height: 1.08;
+  letter-spacing: -.032em;
+  line-height: 1.15;
   margin: 0 0 .9em;
 }
-.markdown h2 { font-size: 1.65rem; letter-spacing: -.03em }
-.markdown h3 { font-size: 1.22rem; letter-spacing: -.018em }
-.markdown h4, .markdown h5, .markdown h6 { font-size: 1rem }
-.markdown h2, .markdown h3 { position: relative }
-.sec-num {
-  font: 500 12px/1 var(--mono);
-  color: var(--faint);
-  margin-right: 12px;
+.markdown h2 {
+  font-size: 1.62rem;
+  letter-spacing: -.026em;
+  line-height: 1.24;
+  margin: 2.6em 0 .85em;
 }
-@media (min-width: 1280px) {
-  .sec-num {
-    position: absolute;
-    top: .4em;
-    right: calc(100% + 22px);
-    margin-right: 0;
-  }
-}
-.markdown p { margin: 0 0 1.35em }
+.markdown h3 { font-size: 1.16rem; letter-spacing: -.018em; margin: 1.9em 0 .6em }
+.markdown h4, .markdown h5, .markdown h6 { font-size: .96rem }
+.markdown strong { color: var(--ink); font-weight: 600 }
+.markdown p { margin: 0 0 1.25em }
 .markdown a {
   color: var(--draft);
   text-decoration: underline;
   text-decoration-thickness: 1px;
-  text-decoration-color: color-mix(in srgb, var(--draft) 32%, transparent);
+  text-decoration-color: color-mix(in srgb, var(--draft) 35%, transparent);
   text-underline-offset: 3px;
+  transition: text-decoration-color .12s;
 }
 .markdown a:hover { text-decoration-color: var(--draft) }
-.markdown ul, .markdown ol { margin: 0 0 1.35em; padding-left: 1.45em }
-.markdown li { margin: .4em 0 }
-.markdown li > ul, .markdown li > ol { margin-bottom: 0 }
+.markdown ul, .markdown ol { margin: 0 0 1.35em; padding-left: 1.35em }
+.markdown li { margin: .55em 0 }
 .markdown li::marker { color: var(--faint) }
-.markdown li:has(> input[type="checkbox"]) { list-style: none; margin-left: -1.4em }
+.markdown li > ul, .markdown li > ol { margin-top: .35em; margin-bottom: 0 }
+.markdown li:has(> input[type="checkbox"]) { list-style: none; margin-left: -1.35em }
 .markdown input[type="checkbox"] { accent-color: var(--draft); margin-right: .5em }
 .markdown blockquote {
-  margin: 0 0 1.55em;
-  padding: .85em 1.2em;
-  border-left: 3px solid var(--draft);
+  margin: 0 0 1.5em;
+  padding: .75em 1.15em;
+  border-left: 2px solid var(--draft);
   border-radius: 0 8px 8px 0;
   background: color-mix(in srgb, var(--draft) 5%, transparent);
   color: var(--graphite);
 }
 .markdown blockquote > :last-child { margin-bottom: 0 }
-.markdown blockquote.gh-alert { border-left-color: var(--alert-color); background: color-mix(in srgb, var(--alert-color) 7%, transparent); color: var(--ink) }
+.markdown blockquote.gh-alert { border-left-color: var(--alert-color); background: color-mix(in srgb, var(--alert-color) 6%, transparent); color: var(--body) }
 .markdown blockquote.gh-alert-note { --alert-color: var(--alert-note) }
 .markdown blockquote.gh-alert-tip { --alert-color: var(--alert-tip) }
 .markdown blockquote.gh-alert-important { --alert-color: var(--alert-important) }
@@ -342,125 +399,145 @@ article.markdown { max-width: 43rem; margin: 0 auto }
 .markdown blockquote.gh-alert-caution { --alert-color: var(--alert-caution) }
 .gh-alert-title {
   display: block;
-  margin-bottom: .45em;
-  font: 700 11px/1.2 var(--sans);
-  letter-spacing: .1em;
+  margin-bottom: .35em;
+  font: 600 10.5px/1.2 var(--sans);
+  letter-spacing: .08em;
   text-transform: uppercase;
   color: var(--alert-color);
 }
 .markdown hr {
   border: 0;
   border-top: 1px solid var(--rule);
-  width: 88px;
-  margin: 3.2em auto;
-}
-.markdown img { display: block; max-width: 100%; height: auto; border: 1px solid var(--rule); border-radius: 8px }
-.markdown table {
-  display: block;
   width: 100%;
-  max-width: 100%;
+  margin: 2.8em 0;
+}
+.markdown img { display: block; max-width: 100%; height: auto; border: 1px solid var(--rule); border-radius: 10px }
+.table-wrap {
+  width: 100%;
   overflow-x: auto;
-  border-collapse: collapse;
   margin: 0 0 2em;
+  border: 1px solid var(--rule);
+  border-radius: 10px;
+}
+.markdown table {
+  width: 100%;
+  border-collapse: collapse;
+  margin: 0;
   font-family: var(--sans);
+  font-variant-numeric: tabular-nums;
 }
 .markdown th {
-  font: 500 10.5px/1.6 var(--mono);
-  letter-spacing: .08em;
-  text-transform: uppercase;
-  color: var(--graphite);
+  font: 600 12px/1.45 var(--sans);
+  color: var(--ink);
   text-align: left;
-  padding: .65em 1.1em;
-  background: var(--wash);
+  padding: .75em 1.05em;
+  background: var(--surface);
   border-bottom: 1px solid var(--rule);
+  border-right: 1px solid var(--rule);
 }
+.markdown th:last-child, .markdown td:last-child { border-right: 0 }
 .markdown td {
-  font-size: 14px;
+  font-size: 13.5px;
   line-height: 1.55;
-  padding: .75em 1.1em;
+  padding: .72em 1.05em;
   border-bottom: 1px solid var(--rule);
+  border-right: 1px solid var(--rule);
   text-align: left;
   vertical-align: top;
 }
+.markdown tbody tr:last-child td { border-bottom: 0 }
 .markdown code {
   font-family: var(--mono);
-  font-size: .82em;
-  background: var(--wash);
-  padding: .12em .38em;
-  border-radius: 3px;
+  font-size: .84em;
+  background: var(--hover);
+  border: 1px solid var(--rule);
+  color: var(--ink);
+  padding: .08em .38em;
+  border-radius: 5px;
 }
 .markdown pre {
-  margin: 0 0 2em;
-  padding: 20px 22px;
-  background: var(--wash);
+  margin: 0 0 1.75em;
+  padding: 16px 20px;
+  background: var(--paper);
   border: 1px solid var(--rule);
-  border-radius: 8px;
+  border-radius: 10px;
   overflow-x: auto;
-  line-height: 1.7;
+  line-height: 1.65;
 }
-.markdown pre code { background: transparent; padding: 0; border-radius: 0; font-size: 13px }
+.markdown pre code { background: transparent; border: 0; color: inherit; padding: 0; border-radius: 0; font-size: 12.5px }
 .markdown pre code.hljs { background: transparent; padding: 0 }
-.codeblock { position: relative; margin: 0 0 2em }
+.codeblock { position: relative; margin: 0 0 1.75em }
 .codeblock pre { margin: 0 }
 .copy-btn {
   position: absolute;
   top: 9px;
   right: 9px;
   font-size: 11px;
-  padding: 5px 9px;
+  padding: 4px 9px;
   border: 1px solid var(--rule);
-  border-radius: 5px;
-  background: var(--paper);
+  border-radius: 6px;
+  background: var(--raised);
   color: var(--graphite);
   cursor: pointer;
   opacity: 0;
-  transition: opacity .15s;
+  transition: opacity .12s, color .12s, border-color .12s;
 }
 .codeblock:hover .copy-btn, .copy-btn:focus-visible, .copy-btn.done { opacity: 1 }
 .copy-btn:hover { color: var(--ink); border-color: var(--faint) }
 .copy-btn.done { color: var(--live); border-color: var(--live) }
 @media (hover: none) { .copy-btn { opacity: 1 } }
-.diagram { position: relative; margin: 0 0 2em; border: 1px solid var(--rule); border-radius: 10px; background: var(--paper); overflow: hidden }
+.diagram { position: relative; margin: 0 0 1.85em; border: 1px solid var(--rule); border-radius: 12px; background: var(--paper); overflow: hidden }
 .diagram-toolbar {
   display: flex;
   flex: 0 0 auto;
   align-items: center;
   gap: 2px;
-  padding: 6px 10px 6px 14px;
+  padding: 5px 10px 5px 14px;
   border-bottom: 1px solid var(--rule);
-  background: var(--wash);
+  background: var(--surface);
 }
 .diagram-hint {
   margin-right: auto;
-  font: 500 11px/1 var(--sans);
+  font: 400 11px/1 var(--sans);
   color: var(--faint);
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+  transition: color .15s;
 }
+.diagram:hover .diagram-hint { color: var(--graphite) }
 .diagram-zoom {
   min-width: 44px;
-  text-align: right;
-  margin-right: 4px;
+  height: 24px;
+  padding: 0 6px;
+  text-align: center;
+  margin-right: 2px;
+  border: 1px solid transparent;
+  border-radius: 6px;
+  background: transparent;
   font: 500 11px/1 var(--mono);
   color: var(--graphite);
   font-variant-numeric: tabular-nums;
+  cursor: pointer;
+  transition: background .12s, color .12s, border-color .12s;
 }
-.diagram-toolbar button {
+.diagram-zoom:hover { background: var(--hover); border-color: var(--rule); color: var(--ink) }
+.diagram-toolbar button:not(.diagram-zoom) {
   display: grid;
   place-items: center;
-  width: 32px;
-  height: 32px;
-  min-width: 32px;
+  width: 26px;
+  height: 26px;
+  min-width: 26px;
   padding: 0;
   border: 0;
-  border-radius: 5px;
+  border-radius: 6px;
   background: transparent;
   color: var(--graphite);
   cursor: pointer;
+  transition: background .12s, color .12s;
 }
-.diagram-toolbar button svg { width: 16px; height: 16px; stroke: currentColor }
-.diagram-toolbar button:hover { background: var(--paper); color: var(--ink) }
+.diagram-toolbar button svg { width: 14px; height: 14px; stroke: currentColor }
+.diagram-toolbar button:not(.diagram-zoom):hover { background: var(--hover); color: var(--ink) }
 .diagram-viewport {
   position: relative;
   overflow: hidden;
@@ -468,7 +545,7 @@ article.markdown { max-width: 43rem; margin: 0 auto }
   cursor: grab;
   height: min(64vh, 520px);
   user-select: none;
-  overscroll-behavior: contain;
+  overscroll-behavior: none;
 }
 .diagram-viewport.dragging { cursor: grabbing }
 .diagram-canvas {
@@ -481,29 +558,70 @@ article.markdown { max-width: 43rem; margin: 0 auto }
   will-change: transform;
 }
 .diagram-canvas svg { display: block; max-width: none !important; pointer-events: none }
+.diagram-minimap {
+  position: absolute;
+  right: 12px;
+  bottom: 12px;
+  z-index: 5;
+  padding: 5px;
+  border: 1px solid var(--rule);
+  border-radius: 8px;
+  background: color-mix(in srgb, var(--chrome) 84%, transparent);
+  backdrop-filter: blur(12px) saturate(1.15);
+  box-shadow: 0 8px 24px rgba(0, 0, 0, .26);
+  cursor: crosshair;
+  opacity: 0;
+  pointer-events: none;
+  transform: translateY(4px);
+  transition: opacity .15s ease, transform .15s ease;
+}
+.diagram-minimap.visible {
+  opacity: 1;
+  pointer-events: auto;
+  transform: none;
+}
+.diagram-minimap-inner {
+  position: relative;
+  overflow: hidden;
+  border-radius: 4px;
+}
+.diagram-minimap canvas {
+  display: block;
+}
+.diagram-minimap-frame {
+  position: absolute;
+  top: 0;
+  left: 0;
+  border: 1.5px solid var(--draft);
+  border-radius: 3px;
+  background: color-mix(in srgb, var(--draft) 16%, transparent);
+  box-shadow: 0 0 0 1px color-mix(in srgb, var(--chrome) 60%, transparent);
+  pointer-events: none;
+}
 .image-diagram .diagram-viewport { height: min(70vh, 640px) }
 .image-diagram .diagram-canvas img { max-width: none; border: 0; border-radius: 0; pointer-events: none; user-select: none }
-.diagram:fullscreen { display: flex; width: 100%; height: 100%; flex-direction: column; border: 0; border-radius: 0; background: var(--canvas) }
-.diagram:fullscreen .diagram-toolbar { padding: 10px 16px }
+.diagram:fullscreen { display: flex; width: 100%; height: 100%; flex-direction: column; border: 0; border-radius: 0; background: var(--canvas); overscroll-behavior: none }
+.diagram:fullscreen .diagram-toolbar { padding: 6px 14px }
 .diagram:fullscreen .diagram-viewport { flex: 1; height: auto !important; min-height: 0; max-height: none }
+.diagram:fullscreen .diagram-minimap { right: 14px; bottom: 14px }
+@media (max-width: 520px) {
+  .diagram:not(:fullscreen) .diagram-minimap { display: none }
+}
 .diagram-error { padding: 20px; font: 400 12.5px/1.6 var(--mono); color: var(--alarm-fg) }
 .diagram-error pre { margin: 10px 0 0 }
-#doc.loading { font: 400 13px/1 var(--mono); color: var(--faint) }
+#doc.loading { font: 400 12.5px/1 var(--mono); color: var(--faint) }
 @media (max-width: 719px) {
-  :root { --slug-h: 52px }
-  #doc-stats, #saved-at { display: none }
-  #slug { padding: 0 16px }
+  :root { --slug-h: 44px }
+  #doc-stats, #saved-at, #live-flag { display: none }
+  #slug { top: 10px; margin: 10px auto 0; max-width: calc(100% - 20px); padding: 0 6px 0 10px }
   #slug-left { gap: 6px }
-  #slug-right { gap: 12px }
-  #explorer-toggle, #explorer-close, #theme-btn { min-height: 38px }
-  #theme-btn { min-width: 78px; padding: 6px 9px }
-  .tree-directory > summary, .tree-file, #toc-nav a, .diagram-toolbar button { min-height: 38px }
-  #toc-nav a { align-items: center }
-  #layout { padding: 24px 14px 80px }
-  #toc-aside { margin: 0 10px 24px }
-  main { padding: 36px 22px 68px; border-radius: 14px }
-  .markdown h1 { font-size: clamp(2rem, 10vw, 2.55rem) }
-  .markdown pre, .diagram { margin-left: -8px; margin-right: -8px }
+  #slug-right { gap: 6px }
+  #explorer-toggle, #explorer-close { min-height: 32px; min-width: 32px }
+  .tree-directory > summary, .tree-file, #toc-nav a, .diagram-toolbar button { min-height: 34px }
+  #layout { padding: 26px 18px 88px }
+  #toc-aside { margin: 0 0 24px }
+  .markdown h1 { font-size: clamp(1.6rem, 7vw, 2.05rem) }
+  .markdown h2 { font-size: 1.38rem }
 }
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after { scroll-behavior: auto !important; transition-duration: 0s !important; animation-duration: 0s !important }
@@ -522,7 +640,11 @@ article.markdown { max-width: 43rem; margin: 0 auto }
     <span id="doc-stats"></span>
     <span id="saved-at"></span>
     <span id="live-flag">live</span>
-    <button id="theme-btn" type="button" title="Cycle color theme">auto</button>
+    <div id="theme-switch" role="group" aria-label="Color theme">
+      <button type="button" data-theme-value="auto" aria-pressed="true">Auto</button>
+      <button type="button" data-theme-value="light" aria-pressed="false">Light</button>
+      <button type="button" data-theme-value="dark" aria-pressed="false">Dark</button>
+    </div>
   </div>
 </header>
 <div id="banner" hidden></div>
@@ -560,7 +682,7 @@ const banner = document.getElementById('banner')
 const tocAside = document.getElementById('toc-aside')
 const tocDetails = document.getElementById('toc')
 const tocNav = document.getElementById('toc-nav')
-const themeButton = document.getElementById('theme-btn')
+const themeSwitch = document.getElementById('theme-switch')
 const liveFlag = document.getElementById('live-flag')
 const docStats = document.getElementById('doc-stats')
 const savedAt = document.getElementById('saved-at')
@@ -572,7 +694,7 @@ const fileTree = document.getElementById('file-tree')
 const lightHl = document.getElementById('hl-light')
 const darkHl = document.getElementById('hl-dark')
 const systemDark = matchMedia('(prefers-color-scheme: dark)')
-const narrowScreen = matchMedia('(max-width: 1119px)')
+const narrowScreen = matchMedia('(max-width: 1059px)')
 const reducedMotion = matchMedia('(prefers-reduced-motion: reduce)')
 const numberFormat = new Intl.NumberFormat()
 
@@ -624,16 +746,18 @@ function applyTheme() {
   const setting = themeSetting()
   const effective = effectiveTheme()
   document.documentElement.dataset.theme = effective
-  themeButton.textContent = 'theme · ' + setting
-  themeButton.setAttribute('aria-label', 'Color theme: ' + setting)
+  for (const btn of themeSwitch.querySelectorAll('button[data-theme-value]')) {
+    btn.setAttribute('aria-pressed', String(btn.dataset.themeValue === setting))
+  }
   lightHl.disabled = effective === 'dark'
   darkHl.disabled = effective !== 'dark'
   rethemeDiagrams()
 }
 
-themeButton.addEventListener('click', () => {
-  const order = ['auto', 'light', 'dark']
-  const next = order[(order.indexOf(themeSetting()) + 1) % order.length]
+themeSwitch.addEventListener('click', event => {
+  const btn = event.target.closest('button[data-theme-value]')
+  if (!btn) return
+  const next = btn.dataset.themeValue
   try {
     localStorage.setItem(THEME_KEY, next)
   } catch (err) {}
@@ -811,28 +935,7 @@ function assignHeadingIds() {
   }
 }
 
-function numberSections() {
-  const majors = docEl.querySelectorAll('h2')
-  if (majors.length < 2) return
-  let section = 0
-  let sub = 0
-  for (const heading of docEl.querySelectorAll('h2, h3')) {
-    if (heading.tagName === 'H2') {
-      section++
-      sub = 0
-    } else {
-      if (!section) continue
-      sub++
-    }
-    const label = heading.tagName === 'H2' ? String(section) : section + '.' + sub
-    heading.dataset.title = heading.textContent
-    heading.dataset.sec = label
-    const marker = document.createElement('span')
-    marker.className = 'sec-num'
-    marker.textContent = label
-    heading.prepend(marker)
-  }
-}
+function numberSections() {}
 
 function buildToc() {
   const headings = [...docEl.querySelectorAll('h1, h2, h3')]
@@ -885,19 +988,29 @@ tocNav.addEventListener('click', event => {
 })
 
 let tocTick = false
+let lastActiveToc = null
 function updateActiveToc() {
   const links = tocNav.querySelectorAll('a')
   if (!links.length) return
   let current = links[0]
   for (const link of links) {
     const heading = headingFromHash(link.hash)
-    if (heading && heading.getBoundingClientRect().top <= 96) current = link
+    if (heading && heading.getBoundingClientRect().top <= 112) current = link
   }
   for (const link of links) {
     const active = link === current
     link.classList.toggle('active', active)
     if (active) link.setAttribute('aria-current', 'location')
     else link.removeAttribute('aria-current')
+  }
+  if (current !== lastActiveToc) {
+    lastActiveToc = current
+    if (!narrowScreen.matches && tocDetails.scrollHeight > tocDetails.clientHeight) {
+      const box = tocDetails.getBoundingClientRect()
+      const item = current.getBoundingClientRect()
+      if (item.top < box.top + 16) tocDetails.scrollTop -= box.top + 16 - item.top
+      else if (item.bottom > box.bottom - 16) tocDetails.scrollTop += item.bottom - (box.bottom - 16)
+    }
   }
 }
 addEventListener('scroll', () => {
@@ -964,6 +1077,16 @@ async function highlightBlock(code, language) {
   } catch (err) {}
 }
 
+function upgradeTables() {
+  for (const table of docEl.querySelectorAll('table')) {
+    if (table.parentElement?.classList.contains('table-wrap')) continue
+    const wrap = document.createElement('div')
+    wrap.className = 'table-wrap'
+    table.replaceWith(wrap)
+    wrap.append(table)
+  }
+}
+
 function upgradeCodeBlocks() {
   for (const code of docEl.querySelectorAll('pre > code')) {
     if (code.classList.contains('language-mermaid')) continue
@@ -995,18 +1118,250 @@ function upgradeCodeBlocks() {
   }
 }
 
+const isMac = /mac/i.test(navigator.userAgentData?.platform || navigator.platform || navigator.userAgent)
+const modKeyLabel = isMac ? '⌘' : 'Ctrl'
+
+function cancelViewAnim(figure) {
+  const view = diagramViews.get(figure)
+  if (view?.animFrame) {
+    cancelAnimationFrame(view.animFrame)
+    view.animFrame = 0
+  }
+}
+
+function panLimits(figure, scale) {
+  const view = diagramViews.get(figure)
+  const viewport = figure.querySelector('.diagram-viewport')
+  const s = scale ?? view.scale
+  const overflowX = view.width * s - viewport.clientWidth
+  const overflowY = view.height * s - viewport.clientHeight
+  const maxPadX = Math.min(180, viewport.clientWidth * 0.2)
+  const maxPadY = Math.min(140, viewport.clientHeight * 0.2)
+  return {
+    limitX: overflowX > 0 ? overflowX / 2 + Math.min(overflowX, maxPadX) : 0,
+    limitY: overflowY > 0 ? overflowY / 2 + Math.min(overflowY, maxPadY) : 0,
+    overflowX,
+    overflowY,
+  }
+}
+
+function clampCoords(figure, x, y, scale) {
+  const { limitX, limitY } = panLimits(figure, scale)
+  return {
+    x: Math.max(-limitX, Math.min(limitX, x)),
+    y: Math.max(-limitY, Math.min(limitY, y)),
+  }
+}
+
+function updateDiagramHint(figure, overflowX, overflowY) {
+  const hint = figure.querySelector('.diagram-hint')
+  if (!hint) return
+  const fullscreen = document.fullscreenElement === figure
+  const zoomed = overflowX > 4 || overflowY > 4
+  const toggleAction = zoomed ? 'fit' : 'zoom'
+  if (fullscreen) {
+    hint.textContent = 'Scroll to pan · Pinch / ' + modKeyLabel + '+scroll to zoom · Double-click to ' + toggleAction
+  } else if (zoomed) {
+    hint.textContent = 'Scroll or drag to pan · Pinch to zoom · Double-click to fit'
+  } else {
+    hint.textContent = 'Pinch / ' + modKeyLabel + '+scroll to zoom · Drag to pan · Double-click to zoom'
+  }
+}
+
+function renderMinimap(figure) {
+  const view = diagramViews.get(figure)
+  const minimap = figure.querySelector('.diagram-minimap')
+  const inner = minimap?.querySelector('.diagram-minimap-inner')
+  const mapCanvas = minimap?.querySelector('canvas')
+  if (!minimap || !inner || !mapCanvas || view.width <= 1 || view.height <= 1) return
+  const fullscreen = document.fullscreenElement === figure
+  const maxW = fullscreen ? 176 : 132
+  const maxH = fullscreen ? 110 : 84
+  const fit = Math.min(maxW / view.width, maxH / view.height)
+  const mapW = Math.max(56, Math.round(view.width * fit))
+  const mapH = Math.max(32, Math.round(view.height * fit))
+  const pad = 4
+  const contentFit = Math.min((mapW - pad * 2) / view.width, (mapH - pad * 2) / view.height)
+  const drawW = Math.max(1, view.width * contentFit)
+  const drawH = Math.max(1, view.height * contentFit)
+  const drawX = (mapW - drawW) / 2
+  const drawY = (mapH - drawH) / 2
+  const dpr = Math.min(2, window.devicePixelRatio || 1)
+  inner.style.width = mapW + 'px'
+  inner.style.height = mapH + 'px'
+  mapCanvas.width = Math.round(mapW * dpr)
+  mapCanvas.height = Math.round(mapH * dpr)
+  mapCanvas.style.width = mapW + 'px'
+  mapCanvas.style.height = mapH + 'px'
+  const ctx = mapCanvas.getContext('2d')
+  if (!ctx) return
+  ctx.setTransform(dpr, 0, 0, dpr, 0, 0)
+  const styles = getComputedStyle(document.documentElement)
+  const bg = styles.getPropertyValue('--canvas').trim() || '#131518'
+  const clusterFill = styles.getPropertyValue('--wash').trim() || '#1b1e23'
+  const clusterStroke = styles.getPropertyValue('--rule').trim() || 'rgba(255, 255, 255, .085)'
+  const nodeFill = styles.getPropertyValue('--paper').trim() || '#17191d'
+  const nodeStroke = styles.getPropertyValue('--draft').trim() || '#96b2d7'
+  ctx.fillStyle = bg
+  ctx.fillRect(0, 0, mapW, mapH)
+
+  const diagramCanvas = figure.querySelector('.diagram-canvas')
+  const img = diagramCanvas?.querySelector('img')
+  const svg = diagramCanvas?.querySelector('svg')
+  if (img && img.complete && img.naturalWidth > 0) {
+    ctx.drawImage(img, drawX, drawY, drawW, drawH)
+    view.minimap = { mapW, mapH, drawX, drawY, drawW, drawH, fullscreen }
+    view.minimapReady = true
+    return
+  }
+  if (svg) {
+    const svgRect = svg.getBoundingClientRect()
+    if (svgRect.width <= 0 || svgRect.height <= 0) return
+    const project = el => {
+      const r = el.getBoundingClientRect()
+      if (r.width <= 0 || r.height <= 0) return null
+      return {
+        x: drawX + ((r.left - svgRect.left) / svgRect.width) * drawW,
+        y: drawY + ((r.top - svgRect.top) / svgRect.height) * drawH,
+        w: Math.max(1.5, (r.width / svgRect.width) * drawW),
+        h: Math.max(1.5, (r.height / svgRect.height) * drawH),
+      }
+    }
+    const clusters = svg.querySelectorAll('.cluster > rect, .cluster > polygon, g.cluster rect')
+    ctx.fillStyle = clusterFill
+    ctx.strokeStyle = clusterStroke
+    ctx.lineWidth = 1
+    for (const el of clusters) {
+      const box = project(el)
+      if (!box) continue
+      ctx.fillRect(box.x, box.y, box.w, box.h)
+      ctx.strokeRect(box.x, box.y, box.w, box.h)
+    }
+    let nodes = svg.querySelectorAll('.node rect, .node polygon, .node circle, .node ellipse, .actor, .note, .task, rect.basic, g.classGroup rect, .er.entityBox, .statediagram-state rect')
+    if (!nodes.length) nodes = svg.querySelectorAll('rect, polygon, circle, ellipse')
+    ctx.fillStyle = nodeFill
+    ctx.strokeStyle = nodeStroke
+    ctx.lineWidth = 0.85
+    for (const el of nodes) {
+      if (el.closest('.cluster') && !el.closest('.node')) continue
+      const box = project(el)
+      if (!box) continue
+      if (box.w > drawW * 0.96 && box.h > drawH * 0.96) continue
+      ctx.fillRect(box.x, box.y, box.w, box.h)
+      ctx.strokeRect(box.x, box.y, box.w, box.h)
+    }
+    view.minimap = { mapW, mapH, drawX, drawY, drawW, drawH, fullscreen }
+    view.minimapReady = true
+  }
+}
+
+function updateMinimapFrame(figure, overflowX, overflowY) {
+  const view = diagramViews.get(figure)
+  const minimap = figure.querySelector('.diagram-minimap')
+  const frame = minimap?.querySelector('.diagram-minimap-frame')
+  if (!minimap || !frame) return
+  const show = overflowX > 4 || overflowY > 4
+  minimap.classList.toggle('visible', show)
+  if (!show) return
+  const fullscreen = document.fullscreenElement === figure
+  if (!view.minimapReady || view.minimap?.fullscreen !== fullscreen) renderMinimap(figure)
+  if (!view.minimap) return
+  const viewport = figure.querySelector('.diagram-viewport')
+  const { mapW, mapH, drawX, drawY, drawW, drawH } = view.minimap
+  const diagLeft = view.width / 2 - (viewport.clientWidth / 2 + view.x) / view.scale
+  const diagTop = view.height / 2 - (viewport.clientHeight / 2 + view.y) / view.scale
+  const diagRight = diagLeft + viewport.clientWidth / view.scale
+  const diagBottom = diagTop + viewport.clientHeight / view.scale
+  const rawX1 = drawX + (diagLeft / view.width) * drawW
+  const rawY1 = drawY + (diagTop / view.height) * drawH
+  const rawX2 = drawX + (diagRight / view.width) * drawW
+  const rawY2 = drawY + (diagBottom / view.height) * drawH
+  const x1 = Math.max(0, Math.min(mapW, rawX1))
+  const y1 = Math.max(0, Math.min(mapH, rawY1))
+  const x2 = Math.max(0, Math.min(mapW, rawX2))
+  const y2 = Math.max(0, Math.min(mapH, rawY2))
+  let fw = Math.max(10, x2 - x1)
+  let fh = Math.max(10, y2 - y1)
+  const cx = (x1 + x2) / 2
+  const cy = (y1 + y2) / 2
+  const fx = Math.max(0, Math.min(mapW - fw, cx - fw / 2))
+  const fy = Math.max(0, Math.min(mapH - fh, cy - fh / 2))
+  fw = Math.min(mapW, fw)
+  fh = Math.min(mapH, fh)
+  frame.style.transform = 'translate(' + fx.toFixed(1) + 'px, ' + fy.toFixed(1) + 'px)'
+  frame.style.width = fw.toFixed(1) + 'px'
+  frame.style.height = fh.toFixed(1) + 'px'
+}
+
 function applyView(figure) {
   const view = diagramViews.get(figure)
   const canvas = figure.querySelector('.diagram-canvas')
   canvas.style.transform = 'translate(-50%, -50%) translate(' + view.x + 'px, ' + view.y + 'px) scale(' + view.scale + ')'
   const readout = figure.querySelector('.diagram-zoom')
-  if (readout) readout.textContent = Math.round(view.scale * 100) + '%'
+  if (readout) {
+    const pct = Math.round(view.scale * 100)
+    readout.textContent = pct + '%'
+    const label = Math.abs(view.scale - 1) < 0.04 ? 'Fit diagram (0)' : 'Actual size 100% (1)'
+    readout.title = label
+    readout.setAttribute('aria-label', pct + '% — ' + label)
+  }
+  const { overflowX, overflowY } = panLimits(figure)
+  updateDiagramHint(figure, overflowX, overflowY)
+  updateMinimapFrame(figure, overflowX, overflowY)
+}
+
+function animateView(figure, target, atFit = false, duration = 160) {
+  cancelViewAnim(figure)
+  const view = diagramViews.get(figure)
+  const clamped = clampCoords(figure, target.x, target.y, target.scale)
+  const end = { x: clamped.x, y: clamped.y, scale: target.scale }
+  if (reducedMotion.matches || duration <= 0) {
+    view.x = end.x
+    view.y = end.y
+    view.scale = end.scale
+    view.atFit = atFit
+    applyView(figure)
+    return
+  }
+  const start = { x: view.x, y: view.y, scale: view.scale }
+  if (Math.abs(end.x - start.x) < 0.25 && Math.abs(end.y - start.y) < 0.25 && Math.abs(end.scale - start.scale) < 1e-4) {
+    view.x = end.x
+    view.y = end.y
+    view.scale = end.scale
+    view.atFit = atFit
+    applyView(figure)
+    return
+  }
+  const t0 = performance.now()
+  const scaleDiff = end.scale - start.scale
+  const step = now => {
+    const t = Math.min(1, (now - t0) / duration)
+    const ease = 1 - Math.pow(1 - t, 3)
+    let u = ease
+    if (Math.abs(scaleDiff) > 1e-5) {
+      view.scale = start.scale * Math.pow(end.scale / start.scale, ease)
+      u = (view.scale - start.scale) / scaleDiff
+    } else {
+      view.scale = end.scale
+    }
+    view.x = start.x + (end.x - start.x) * u
+    view.y = start.y + (end.y - start.y) * u
+    view.atFit = t === 1 ? atFit : false
+    applyView(figure)
+    if (t < 1) {
+      view.animFrame = requestAnimationFrame(step)
+    } else {
+      view.animFrame = 0
+    }
+  }
+  view.animFrame = requestAnimationFrame(step)
 }
 
 function measureDiagram(figure) {
   const view = diagramViews.get(figure)
   const canvas = figure.querySelector('.diagram-canvas')
   const svg = canvas.querySelector('svg')
+  view.minimapReady = false
   if (svg) {
     const vb = svg.viewBox?.baseVal
     let w = vb && vb.width > 0 ? vb.width : 0
@@ -1049,14 +1404,12 @@ function sizeInlineViewport(figure) {
 
 function clampView(figure) {
   const view = diagramViews.get(figure)
-  const viewport = figure.querySelector('.diagram-viewport')
-  const limitX = Math.max(0, (view.width * view.scale - viewport.clientWidth) / 2 + 64)
-  const limitY = Math.max(0, (view.height * view.scale - viewport.clientHeight) / 2 + 64)
-  view.x = Math.max(-limitX, Math.min(limitX, view.x))
-  view.y = Math.max(-limitY, Math.min(limitY, view.y))
+  const clamped = clampCoords(figure, view.x, view.y, view.scale)
+  view.x = clamped.x
+  view.y = clamped.y
 }
 
-function fitView(figure) {
+function fitView(figure, animate = false) {
   const view = diagramViews.get(figure)
   const viewport = figure.querySelector('.diagram-viewport')
   const fullscreen = document.fullscreenElement === figure
@@ -1065,14 +1418,19 @@ function fitView(figure) {
   const scaleX = Math.max(1, viewport.clientWidth - padding) / view.width
   const scaleY = Math.max(1, viewport.clientHeight - padding) / view.height
   view.fitScale = Math.min(maxFit, scaleX, scaleY)
-  view.scale = view.fitScale
-  view.x = 0
-  view.y = 0
-  view.atFit = true
-  applyView(figure)
+  if (animate) {
+    animateView(figure, { scale: view.fitScale, x: 0, y: 0 }, true)
+  } else {
+    cancelViewAnim(figure)
+    view.scale = view.fitScale
+    view.x = 0
+    view.y = 0
+    view.atFit = true
+    applyView(figure)
+  }
 }
 
-function zoomAt(figure, factor, cx, cy) {
+function zoomAt(figure, factor, cx, cy, animate = false) {
   const view = diagramViews.get(figure)
   const viewport = figure.querySelector('.diagram-viewport')
   const maxScale = Math.max(8, view.fitScale * 4)
@@ -1080,24 +1438,154 @@ function zoomAt(figure, factor, cx, cy) {
   const applied = nextScale / view.scale
   const offsetX = cx - viewport.clientWidth / 2
   const offsetY = cy - viewport.clientHeight / 2
-  view.x = offsetX - (offsetX - view.x) * applied
-  view.y = offsetY - (offsetY - view.y) * applied
-  view.scale = nextScale
-  view.atFit = false
-  clampView(figure)
-  applyView(figure)
+  const nextX = offsetX - (offsetX - view.x) * applied
+  const nextY = offsetY - (offsetY - view.y) * applied
+  if (animate) {
+    animateView(figure, { scale: nextScale, x: nextX, y: nextY }, false)
+  } else {
+    cancelViewAnim(figure)
+    view.x = nextX
+    view.y = nextY
+    view.scale = nextScale
+    view.atFit = false
+    clampView(figure)
+    applyView(figure)
+  }
+}
+
+function panBy(figure, dx, dy, animate = false) {
+  const view = diagramViews.get(figure)
+  if (animate) {
+    animateView(figure, { scale: view.scale, x: view.x + dx, y: view.y + dy }, false, 130)
+  } else {
+    cancelViewAnim(figure)
+    view.x += dx
+    view.y += dy
+    view.atFit = false
+    clampView(figure)
+    applyView(figure)
+  }
+}
+
+function toggleZoomAt(figure, cx, cy) {
+  const view = diagramViews.get(figure)
+  if (view.scale <= view.fitScale * 1.08) {
+    const targetScale = Math.max(1, view.fitScale * 1.85)
+    zoomAt(figure, targetScale / view.scale, cx, cy, true)
+  } else {
+    fitView(figure, true)
+  }
+}
+
+function toggleActualSize(figure) {
+  const view = diagramViews.get(figure)
+  const viewport = figure.querySelector('.diagram-viewport')
+  const cx = viewport.clientWidth / 2
+  const cy = viewport.clientHeight / 2
+  if (Math.abs(view.scale - 1) < 0.04) {
+    if (Math.abs(view.fitScale - 1) < 0.04 && view.atFit) zoomAt(figure, 1.5, cx, cy, true)
+    else fitView(figure, true)
+  } else {
+    zoomAt(figure, 1 / view.scale, cx, cy, true)
+  }
+}
+
+function handleDiagramKey(figure, viewport, e) {
+  const fullscreen = document.fullscreenElement === figure
+  const mod = e.metaKey || e.ctrlKey
+  if (mod && !fullscreen) return false
+  if (e.altKey) return false
+  const center = { x: viewport.clientWidth / 2, y: viewport.clientHeight / 2 }
+  const step = e.shiftKey ? 280 : 120
+  if (!mod && fullscreen && e.key === 'Escape') {
+    document.exitFullscreen?.()
+  } else if (e.key === '+' || e.key === '=') {
+    zoomAt(figure, 1.25, center.x, center.y, true)
+  } else if (e.key === '-' || e.key === '_') {
+    zoomAt(figure, 1 / 1.25, center.x, center.y, true)
+  } else if (e.key === '0') {
+    fitView(figure, true)
+  } else if (e.key === '1') {
+    zoomAt(figure, 1 / diagramViews.get(figure).scale, center.x, center.y, true)
+  } else if (!mod && e.key.toLowerCase() === 'f') {
+    toggleFullscreen(figure)
+  } else if (!mod && (e.key === 'ArrowLeft' || e.key === 'ArrowRight' || e.key === 'ArrowUp' || e.key === 'ArrowDown')) {
+    const { limitX, limitY } = panLimits(figure)
+    if (e.key === 'ArrowLeft' || e.key === 'ArrowRight') {
+      if (!fullscreen && limitX <= 0) return false
+      panBy(figure, e.key === 'ArrowLeft' ? step : -step, 0, true)
+    } else {
+      if (!fullscreen && limitY <= 0) return false
+      panBy(figure, 0, e.key === 'ArrowUp' ? step : -step, true)
+    }
+  } else {
+    return false
+  }
+  e.preventDefault()
+  return true
+}
+
+function wireMinimap(figure, minimap) {
+  let dragging = false
+  const jumpTo = (e, animate) => {
+    const view = diagramViews.get(figure)
+    const inner = minimap.querySelector('.diagram-minimap-inner')
+    if (!view.minimap || !inner) return
+    const rect = inner.getBoundingClientRect()
+    const { drawX, drawY, drawW, drawH } = view.minimap
+    const nx = Math.max(0, Math.min(1, (e.clientX - rect.left - drawX) / drawW))
+    const ny = Math.max(0, Math.min(1, (e.clientY - rect.top - drawY) / drawH))
+    const targetX = (0.5 - nx) * view.width * view.scale
+    const targetY = (0.5 - ny) * view.height * view.scale
+    if (animate) {
+      animateView(figure, { scale: view.scale, x: targetX, y: targetY }, false, 120)
+    } else {
+      cancelViewAnim(figure)
+      view.x = targetX
+      view.y = targetY
+      view.atFit = false
+      clampView(figure)
+      applyView(figure)
+    }
+  }
+  minimap.addEventListener('pointerdown', e => {
+    if (e.pointerType === 'mouse' && e.button !== 0) return
+    e.stopPropagation()
+    e.preventDefault()
+    dragging = true
+    minimap.setPointerCapture(e.pointerId)
+    jumpTo(e, true)
+  })
+  minimap.addEventListener('pointermove', e => {
+    if (!dragging) return
+    e.stopPropagation()
+    jumpTo(e, false)
+  })
+  const stop = e => {
+    if (!dragging) return
+    e.stopPropagation()
+    dragging = false
+  }
+  minimap.addEventListener('pointerup', stop)
+  minimap.addEventListener('pointercancel', stop)
+  minimap.addEventListener('lostpointercapture', stop)
+  minimap.addEventListener('dblclick', e => e.stopPropagation())
 }
 
 function wirePanZoom(figure, viewport) {
   const pointers = new Map()
+  let lastWheelTime = 0
+  let wheelPanLocked = false
+  let safariGestureScale = 1
   const gesture = () => {
     const [a, b] = [...pointers.values()]
     if (!b) return { x: a.x, y: a.y, distance: 0 }
     return { x: (a.x + b.x) / 2, y: (a.y + b.y) / 2, distance: Math.hypot(a.x - b.x, a.y - b.y) }
   }
   viewport.addEventListener('pointerdown', e => {
-    if (e.pointerType === 'mouse' && e.button !== 0) return
+    if (e.pointerType === 'mouse' && e.button !== 0 && e.button !== 1) return
     e.preventDefault()
+    cancelViewAnim(figure)
     viewport.focus({ preventScroll: true })
     viewport.setPointerCapture(e.pointerId)
     pointers.set(e.pointerId, { x: e.clientX, y: e.clientY })
@@ -1129,25 +1617,95 @@ function wirePanZoom(figure, viewport) {
   viewport.addEventListener('pointerup', release)
   viewport.addEventListener('pointercancel', release)
   viewport.addEventListener('lostpointercapture', release)
-  viewport.addEventListener('wheel', e => {
-    if (!e.ctrlKey && !e.metaKey && document.fullscreenElement !== figure) return
-    e.preventDefault()
+
+  const handleWheel = e => {
+    const fullscreen = document.fullscreenElement === figure
     const rect = viewport.getBoundingClientRect()
-    const delta = e.deltaMode === 1 ? e.deltaY * 16 : e.deltaY
-    zoomAt(figure, Math.exp(-delta * 0.002), e.clientX - rect.left, e.clientY - rect.top)
+    const cx = Math.max(0, Math.min(viewport.clientWidth, e.clientX - rect.left))
+    const cy = Math.max(0, Math.min(viewport.clientHeight, e.clientY - rect.top))
+
+    // Trackpad pinch (ctrlKey in Chromium) or Cmd/Ctrl + scroll -> smooth cursor-anchored zoom
+    if (e.ctrlKey || e.metaKey) {
+      e.preventDefault()
+      const raw = e.deltaMode === 1 ? e.deltaY * 16 : e.deltaMode === 2 ? e.deltaY * 120 : e.deltaY
+      const factor = e.deltaMode === 0
+        ? Math.exp(-Math.max(-26, Math.min(26, raw)) * 0.01)
+        : Math.exp(-Math.max(-120, Math.min(120, raw)) * 0.003)
+      zoomAt(figure, factor, cx, cy)
+      return
+    }
+
+    let dx = e.deltaX
+    let dy = e.deltaY
+    if (e.deltaMode === 1) {
+      dx *= 16
+      dy *= 16
+    } else if (e.deltaMode === 2) {
+      dx *= viewport.clientWidth
+      dy *= viewport.clientHeight
+    }
+    if (e.shiftKey && dx === 0 && dy !== 0) {
+      dx = dy
+      dy = 0
+    }
+
+    // Fullscreen: two-finger trackpad scroll always pans freely in X & Y and blocks swipe-back
+    if (fullscreen) {
+      e.preventDefault()
+      panBy(figure, -dx, -dy)
+      return
+    }
+
+    // Inline: pan smoothly when zoomed/overflowing, release cleanly to document scroll at vertical edges
+    const view = diagramViews.get(figure)
+    const { limitX, limitY } = panLimits(figure)
+    if (limitX <= 0 && limitY <= 0) return
+
+    const now = performance.now()
+    const newGesture = now - lastWheelTime > 140
+    lastWheelTime = now
+    if (newGesture) wheelPanLocked = false
+
+    const horizontalIntent = Math.abs(dx) > Math.abs(dy) && limitX > 0
+    const canPanX = limitX > 0 && Math.abs(dx) >= Math.abs(dy) * 0.5 && Math.abs(dx) > 0.5 && ((dx > 0 && view.x > -limitX + 0.5) || (dx < 0 && view.x < limitX - 0.5))
+    const canPanY = limitY > 0 && Math.abs(dy) > 0.5 && ((dy > 0 && view.y > -limitY + 0.5) || (dy < 0 && view.y < limitY - 0.5))
+
+    if (wheelPanLocked || horizontalIntent || (limitY > 0 && (canPanY || canPanX))) {
+      wheelPanLocked = true
+      e.preventDefault()
+      panBy(figure, limitX > 0 ? -dx : 0, limitY > 0 ? -dy : 0)
+    }
+  }
+
+  viewport.addEventListener('wheel', handleWheel, { passive: false })
+  figure.addEventListener('wheel', e => {
+    if (document.fullscreenElement !== figure) return
+    if (viewport.contains(e.target)) return
+    handleWheel(e)
   }, { passive: false })
+
+  // WebKit / Safari native trackpad pinch fallback
+  viewport.addEventListener('gesturestart', e => {
+    e.preventDefault()
+    safariGestureScale = e.scale || 1
+  }, { passive: false })
+  viewport.addEventListener('gesturechange', e => {
+    e.preventDefault()
+    const next = e.scale || 1
+    const rect = viewport.getBoundingClientRect()
+    zoomAt(figure, next / safariGestureScale, e.clientX - rect.left, e.clientY - rect.top)
+    safariGestureScale = next
+  }, { passive: false })
+
   viewport.addEventListener('dblclick', e => {
     const rect = viewport.getBoundingClientRect()
-    zoomAt(figure, e.shiftKey ? 1 / 1.5 : 1.5, e.clientX - rect.left, e.clientY - rect.top)
+    const cx = e.clientX - rect.left
+    const cy = e.clientY - rect.top
+    if (e.shiftKey) zoomAt(figure, 1 / 1.5, cx, cy, true)
+    else toggleZoomAt(figure, cx, cy)
   })
   viewport.addEventListener('keydown', e => {
-    const center = { x: viewport.clientWidth / 2, y: viewport.clientHeight / 2 }
-    if (e.key === '+' || e.key === '=') zoomAt(figure, 1.2, center.x, center.y)
-    else if (e.key === '-') zoomAt(figure, 1 / 1.2, center.x, center.y)
-    else if (e.key === '0') fitView(figure)
-    else if (e.key.toLowerCase() === 'f') toggleFullscreen(figure)
-    else return
-    e.preventDefault()
+    handleDiagramKey(figure, viewport, e)
   })
 }
 
@@ -1189,35 +1747,70 @@ function buildDiagramShell(source, contentLabel = 'diagram') {
   toolbar.className = 'diagram-toolbar'
   const hint = document.createElement('span')
   hint.className = 'diagram-hint'
-  hint.textContent = 'Drag to pan · ⌘/Ctrl + scroll to zoom · double-click to zoom'
-  const zoomReadout = document.createElement('span')
+  hint.textContent = 'Pinch / ' + modKeyLabel + '+scroll to zoom · Drag to pan · Double-click to zoom'
+  const zoomReadout = document.createElement('button')
+  zoomReadout.type = 'button'
   zoomReadout.className = 'diagram-zoom'
   zoomReadout.textContent = '100%'
+  zoomReadout.addEventListener('click', () => toggleActualSize(figure))
   toolbar.append(hint, zoomReadout)
   const viewport = document.createElement('div')
   viewport.className = 'diagram-viewport'
   viewport.tabIndex = 0
-  viewport.setAttribute('aria-label', 'Interactive ' + contentLabel + '. Drag to pan, use Control or Command plus scroll to zoom, and press 0 to fit.')
+  viewport.setAttribute('aria-label', 'Interactive ' + contentLabel + '. Two-finger scroll or drag to pan, pinch or use Command/Control plus scroll to zoom, double-click to toggle zoom, and press 0 to fit.')
   const canvas = document.createElement('div')
   canvas.className = 'diagram-canvas'
-  viewport.append(canvas)
+  const minimap = document.createElement('div')
+  minimap.className = 'diagram-minimap'
+  minimap.setAttribute('aria-hidden', 'true')
+  const minimapInner = document.createElement('div')
+  minimapInner.className = 'diagram-minimap-inner'
+  const minimapCanvas = document.createElement('canvas')
+  const minimapFrame = document.createElement('div')
+  minimapFrame.className = 'diagram-minimap-frame'
+  minimapInner.append(minimapCanvas, minimapFrame)
+  minimap.append(minimapInner)
+  viewport.append(canvas, minimap)
   const center = () => ({ x: viewport.clientWidth / 2, y: viewport.clientHeight / 2 })
-  diagramButton(toolbar, 'zoomOut', 'Zoom out', () => {
+  diagramButton(toolbar, 'zoomOut', 'Zoom out (-)', () => {
     const c = center()
-    zoomAt(figure, 1 / 1.25, c.x, c.y)
+    zoomAt(figure, 1 / 1.25, c.x, c.y, true)
   })
-  diagramButton(toolbar, 'zoomIn', 'Zoom in', () => {
+  diagramButton(toolbar, 'zoomIn', 'Zoom in (+)', () => {
     const c = center()
-    zoomAt(figure, 1.25, c.x, c.y)
+    zoomAt(figure, 1.25, c.x, c.y, true)
   })
-  diagramButton(toolbar, 'fit', 'Fit diagram', () => fitView(figure))
-  const fullscreenButton = diagramButton(toolbar, 'fullscreen', 'Enter fullscreen', () => toggleFullscreen(figure))
+  diagramButton(toolbar, 'fit', 'Fit diagram (0)', () => fitView(figure, true))
+  const fullscreenButton = diagramButton(toolbar, 'fullscreen', 'Enter fullscreen (f)', () => toggleFullscreen(figure))
   fullscreenButton.dataset.action = 'fullscreen'
   figure.append(toolbar, viewport)
-  diagramViews.set(figure, { scale: 1, x: 0, y: 0, fitScale: 1, width: 1, height: 1, atFit: true, fullscreen: false, normal: null, inlineHeight: '' })
+  diagramViews.set(figure, {
+    scale: 1,
+    x: 0,
+    y: 0,
+    fitScale: 1,
+    width: 1,
+    height: 1,
+    atFit: true,
+    fullscreen: false,
+    normal: null,
+    inlineHeight: '',
+    animFrame: 0,
+    minimap: null,
+    minimapReady: false,
+  })
+  wireMinimap(figure, minimap)
   wirePanZoom(figure, viewport)
   return figure
 }
+
+document.addEventListener('keydown', e => {
+  const figure = document.fullscreenElement
+  if (!figure || !diagramViews.has(figure)) return
+  const viewport = figure.querySelector('.diagram-viewport')
+  if (!viewport || e.target === viewport) return
+  handleDiagramKey(figure, viewport, e)
+})
 
 document.addEventListener('fullscreenchange', () => {
   for (const figure of diagrams) {
@@ -1225,12 +1818,15 @@ document.addEventListener('fullscreenchange', () => {
     const viewport = figure.querySelector('.diagram-viewport')
     const button = figure.querySelector('[data-action="fullscreen"]')
     const fullscreen = document.fullscreenElement === figure
-    button.title = fullscreen ? 'Exit fullscreen' : 'Enter fullscreen'
+    button.title = fullscreen ? 'Exit fullscreen (Esc)' : 'Enter fullscreen (f)'
     button.setAttribute('aria-label', button.title)
+    cancelViewAnim(figure)
+    view.minimapReady = false
     if (fullscreen) {
       if (!view.normal) view.normal = { scale: view.scale, x: view.x, y: view.y, fitScale: view.fitScale, atFit: view.atFit }
       view.fullscreen = true
       viewport.style.height = ''
+      viewport.focus({ preventScroll: true })
       requestAnimationFrame(() => requestAnimationFrame(() => fitView(figure)))
     } else if (view.fullscreen) {
       view.fullscreen = false
@@ -1274,44 +1870,44 @@ function configureMermaid(mermaid) {
     startOnLoad: false,
     securityLevel: 'loose',
     theme: 'base',
-    fontFamily: "'Manrope', -apple-system, BlinkMacSystemFont, sans-serif",
+    fontFamily: "-apple-system, BlinkMacSystemFont, 'SF Pro Text', 'Inter', system-ui, sans-serif",
     flowchart: { useMaxWidth: false, htmlLabels: true, padding: 14, nodeSpacing: 36, rankSpacing: 44 },
     themeVariables: dark ? {
       darkMode: true,
-      background: '#191b17',
-      primaryColor: '#252922',
-      primaryTextColor: '#edebe3',
-      primaryBorderColor: '#88b9aa',
-      secondaryColor: '#20231d',
-      secondaryTextColor: '#edebe3',
-      secondaryBorderColor: '#4a5248',
-      tertiaryColor: '#1f221c',
-      tertiaryTextColor: '#edebe3',
-      tertiaryBorderColor: '#3a3f36',
-      lineColor: '#88b9aa',
-      textColor: '#edebe3',
-      clusterBkg: '#1d201a',
-      clusterBorder: '#43493e',
-      edgeLabelBackground: '#191b17',
-      fontSize: '14px',
+      background: '#17191d',
+      primaryColor: '#1e2127',
+      primaryTextColor: '#e6e8ec',
+      primaryBorderColor: '#96b2d7',
+      secondaryColor: '#191c21',
+      secondaryTextColor: '#e6e8ec',
+      secondaryBorderColor: '#3a404c',
+      tertiaryColor: '#16181c',
+      tertiaryTextColor: '#e6e8ec',
+      tertiaryBorderColor: '#2c3039',
+      lineColor: '#96b2d7',
+      textColor: '#e6e8ec',
+      clusterBkg: '#14161a',
+      clusterBorder: '#2e333d',
+      edgeLabelBackground: '#17191d',
+      fontSize: '13.5px',
     } : {
       darkMode: false,
-      background: '#fffefa',
-      primaryColor: '#f4f3ed',
-      primaryTextColor: '#252722',
-      primaryBorderColor: '#2f6b5c',
-      secondaryColor: '#efede5',
-      secondaryTextColor: '#252722',
-      secondaryBorderColor: '#92978c',
-      tertiaryColor: '#f8f7f2',
-      tertiaryTextColor: '#252722',
-      tertiaryBorderColor: '#dedfd7',
-      lineColor: '#2f6b5c',
-      textColor: '#252722',
-      clusterBkg: '#f7f6f0',
-      clusterBorder: '#cfcfc4',
-      edgeLabelBackground: '#fffefa',
-      fontSize: '14px',
+      background: '#ffffff',
+      primaryColor: '#f6f7f9',
+      primaryTextColor: '#1b1b1e',
+      primaryBorderColor: '#1f62d0',
+      secondaryColor: '#f2f4f7',
+      secondaryTextColor: '#1b1b1e',
+      secondaryBorderColor: '#c4c9d4',
+      tertiaryColor: '#f9fafb',
+      tertiaryTextColor: '#1b1b1e',
+      tertiaryBorderColor: '#dfe2e8',
+      lineColor: '#1f62d0',
+      textColor: '#1b1b1e',
+      clusterBkg: '#fafbfc',
+      clusterBorder: '#e1e4ea',
+      edgeLabelBackground: '#ffffff',
+      fontSize: '13.5px',
     },
   })
 }
@@ -1378,6 +1974,11 @@ async function upgradeImages() {
 
 function rethemeDiagrams() {
   if (!diagrams.length) return
+  for (const figure of diagrams) {
+    const view = diagramViews.get(figure)
+    if (view) view.minimapReady = false
+    if (!figure.classList.contains('mermaid-diagram')) applyView(figure)
+  }
   getMermaid().then(mermaid => {
     if (!mermaid) return
     configureMermaid(mermaid)
@@ -1423,6 +2024,7 @@ async function renderDoc(markdown) {
   numberSections()
   buildToc()
   decorateLinks()
+  upgradeTables()
   upgradeCodeBlocks()
   await upgradeImages()
   if (!(wasFirst && scrollToHeading(location.hash))) window.scrollTo(0, scrollY)
