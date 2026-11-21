@@ -560,7 +560,21 @@ export default class Settings extends View {
           this.stepper(t, `st-${key}`, `${Math.round(s[key] * 100)}%`, by(-step), by(step)),
         );
       }))
-      .child(fontRow("ui_font", null, "Interface font", s.ui_font_family, DEFAULT_UI_FONT));
+      .child(fontRow("ui_font", null, "Interface font", s.ui_font_family, DEFAULT_UI_FONT))
+      .child(div().h(18))
+      .child(this.heading(t, "Links"))
+      .child(
+        this.row(
+          t,
+          "Open links in Herdr",
+          "Links clicked in terminals and files, and pages programs open. Off sends them to your default browser.",
+          this.toggle(t, "st-links", this.person.links !== "system", (_e, cx) =>
+            this.change((p) => {
+              if (p.links === "system") delete p.links;
+              else p.links = "system";
+            }, cx)),
+        ),
+      );
   }
 
   keyboard(t) {

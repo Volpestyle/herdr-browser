@@ -173,7 +173,9 @@ Each file is one whole window. `layout.switch` (`ctrl-shift-l`) cycles
 through them, `layout.switch {name}` picks one; `shared("layout")` is the
 shown one's name. Herdr ships `main` ("Herdr": spaces by machine and the
 agents list on the left, `workspace-chrome`; tabs as pills with a + menu
-that starts a terminal or any installed agent, `new-menu`; panes as cards
+that starts a terminal or any installed agent, `new-menu`; a tab's right-click
+menu pins it (first in its space, icon-only, no close button: shared
+`"tabs.pinned"`, tab ids); panes as cards
 with a header; Files and Changes panels on the right, `files` and
 `changes`, opened from the tab bar and remembered per space (which ones:
 shared `"workspace.panels"`, set by the welcome); a status bar,
@@ -815,6 +817,10 @@ What's about the user, never a look:
   pastes PRIMARY on Linux, does nothing on macOS, and pastes the clipboard on
   Windows. Programs that capture the mouse still receive middle-clicks.
   Hold Shift while dragging in programs that capture the mouse.
+- `links`: `"system"` sends followed links (Cmd/Ctrl-click in a terminal, a
+  link in a file preview, a page a program opens through `$BROWSER`) to the
+  default browser instead of a Herdr browser tab. `browser.open` still opens
+  here. Also in Settings, Look. Applies immediately.
 - `pane_scrollbars`: `false` hides the scroll position thumb at a terminal
   pane's right edge (default `true`). It shows only when the pane has
   scrollback — never on the alternate screen (editors, pagers) — and
