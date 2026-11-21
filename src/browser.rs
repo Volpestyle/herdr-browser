@@ -23,6 +23,7 @@ pub fn is_page_command(name: &str) -> bool {
         "browser.snapshot"
             | "browser.cdp"
             | "browser.read"
+            | "browser.eval"
             | "browser.click"
             | "browser.type"
             | "browser.signin"

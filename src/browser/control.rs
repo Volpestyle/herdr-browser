@@ -76,6 +76,60 @@ fn encode(recording: Recording, end: f64) -> Result<std::path::PathBuf, String> 
     Ok(video)
 }
 
+/// Roles an agent can act on: what `name` lookups and `filter: "interactive"` keep.
+const INTERACTIVE: &[&str] = &[
+    "button", "link", "textbox", "searchbox", "combobox", "checkbox", "radio", "switch",
+    "tab", "menuitem", "menuitemcheckbox", "menuitemradio", "option", "slider",
+    "spinbutton", "listbox", "treeitem",
+];
+
+/// Scroll offsets of every scroller under a point, innermost first, then the page.
+/// `__POINT__` is `[x, y]` or `null` for the middle of the viewport. The elements stay
+/// in the isolated world so the read after the wheel compares the same ones.
+const SCROLLERS: &str = r#"(() => {
+  const at = __POINT__ ?? [innerWidth / 2, innerHeight / 2];
+  let e = document.elementFromPoint(at[0], at[1]);
+  while (e?.shadowRoot) {
+    const inner = e.shadowRoot.elementFromPoint(at[0], at[1]);
+    if (!inner || inner === e) break;
+    e = inner;
+  }
+  const frame = !!e?.matches?.('iframe,frame,object,embed');
+  const chain = [];
+  for (; e; e = e.parentElement || e.getRootNode?.()?.host || null) {
+    if (e.scrollHeight <= e.clientHeight + 1 && e.scrollWidth <= e.clientWidth + 1) continue;
+    const style = getComputedStyle(e);
+    if (/auto|scroll|overlay/.test(style.overflowX + style.overflowY)) chain.push(e);
+  }
+  const page = document.scrollingElement;
+  if (page && !chain.includes(page)) chain.push(page);
+  const same = !frame && chain[0] === globalThis.herdrScrollers?.[0];
+  globalThis.herdrScrollers = chain;
+  return {at, frame, same, state: herdrScrollState()};
+})()"#;
+const SCROLL_STATE: &str = r#"globalThis.herdrScrollState = () => (globalThis.herdrScrollers || []).map(e =>
+  [e.scrollLeft, e.scrollTop, Math.max(0, e.scrollWidth - e.clientWidth), Math.max(0, e.scrollHeight - e.clientHeight)]);"#;
+
+/// True once the document has loaded, the images in view have arrived and the DOM
+/// has been quiet for 400 ms. The observer lives in the isolated world per document.
+const SETTLED: &str = r#"(() => {
+  if (!globalThis.herdrSettle) {
+    const s = globalThis.herdrSettle = {last: performance.now()};
+    new MutationObserver(() => { s.last = performance.now(); })
+      .observe(document, {subtree: true, childList: true, attributes: true, characterData: true});
+  }
+  const loading = [...document.images].some(i => {
+    if (i.complete) return false;
+    const r = i.getBoundingClientRect();
+    return r.width > 0 && r.bottom > 0 && r.top < innerHeight && r.right > 0 && r.left < innerWidth;
+  });
+  return document.readyState === 'complete' && !loading && performance.now() - herdrSettle.last >= 400;
+})()"#;
+
+/// Chromium keeps a wheel gesture on the scroller it began on for half a second after
+/// the last wheel; one aimed at another scroller inside that window is swallowed.
+const WHEEL_LATCH: Duration = Duration::from_millis(700);
+
 type Reply = async_channel::Sender<Result<Value, String>>;
 wrap_dev_tools_message_observer! {
     struct Observer { pending: Rc<RefCell<HashMap<i32, Reply>>>, epoch: Rc<Cell<u64>>, recording: Rc<RefCell<Option<Recording>>> }
@@ -132,6 +186,7 @@ pub struct Control {
     caller: RefCell<Option<String>>,
     cursor: fn(Option<&str>) -> Vec<u8>,
     recording: Rc<RefCell<Option<Recording>>>,
+    wheeled: Cell<Option<Instant>>,
 }
 struct Busy<'a>(&'a Cell<bool>);
 impl Drop for Busy<'_> {
@@ -162,6 +217,7 @@ impl Control {
             caller: RefCell::new(None),
             cursor,
             recording,
+            wheeled: Cell::new(None),
         })
     }
 
@@ -169,6 +225,16 @@ impl Control {
         &self,
         method: &str,
         params: Value,
+        executor: &BackgroundExecutor,
+    ) -> Result<Value, String> {
+        self.call_within(method, params, Duration::from_secs(3), executor).await
+    }
+
+    async fn call_within(
+        &self,
+        method: &str,
+        params: Value,
+        wait: Duration,
         executor: &BackgroundExecutor,
     ) -> Result<Value, String> {
         let id = self
@@ -187,7 +253,7 @@ impl Control {
         }
         let answer = rx
             .recv()
-            .with_timeout(Duration::from_secs(3), executor)
+            .with_timeout(wait, executor)
             .await;
         self.pending.borrow_mut().remove(&id);
         answer
@@ -304,11 +370,6 @@ impl Control {
         nth: Option<u64>,
         ex: &BackgroundExecutor,
     ) -> Result<i64, String> {
-        const INTERACTIVE: &[&str] = &[
-            "button", "link", "textbox", "searchbox", "combobox", "checkbox", "radio", "switch",
-            "tab", "menuitem", "menuitemcheckbox", "menuitemradio", "option", "slider",
-            "spinbutton", "listbox", "treeitem",
-        ];
         self.call("Accessibility.enable", json!({}), ex).await?;
         let tree = self
             .call("Accessibility.getFullAXTree", json!({}), ex)
@@ -483,6 +544,72 @@ impl Control {
             .await?;
         }
         Ok(())
+    }
+
+    /// Wheels at `point` (default: the middle of the viewport, which is over the
+    /// content on pages with fixed chrome at the edges) and reports what moved.
+    async fn wheel(&self, point: Option<(f64, f64)>, dx: f64, dy: f64, ex: &BackgroundExecutor) -> Result<Value, String> {
+        let point = point.map_or(Value::Null, |(x, y)| json!([x, y]));
+        let script = format!("{SCROLL_STATE}\n{}", SCROLLERS.replace("__POINT__", &point.to_string()));
+        let before = self.evaluate(&script, ex).await?;
+        let (x, y) = (
+            before["at"][0].as_f64().ok_or("Page has no viewport")?,
+            before["at"][1].as_f64().ok_or("Page has no viewport")?,
+        );
+        if before["same"] != true {
+            if let Some(left) = self.wheeled.get().and_then(|at| WHEEL_LATCH.checked_sub(at.elapsed())) {
+                ex.timer(left).await;
+            }
+        }
+        self.call(
+            "Input.dispatchMouseEvent",
+            json!({"type":"mouseWheel","x":x,"y":y,"deltaX":dx,"deltaY":dy}),
+            ex,
+        )
+        .await?;
+        self.wheeled.set(Some(Instant::now()));
+        if before["frame"] == true {
+            // The wheel went into another document; its offsets are not ours to read.
+            return Ok(json!({"ok":true,"measured":false}));
+        }
+        // Chromium applies the wheel over the next frames; read until it rests.
+        let mut after = before["state"].clone();
+        let started = Instant::now();
+        loop {
+            ex.timer(Duration::from_millis(50)).await;
+            let Ok(now) = self.evaluate("globalThis.herdrScrollState?.() ?? null", ex).await else {
+                return Ok(json!({"ok":true,"measured":false}));
+            };
+            let waited = started.elapsed();
+            let rested = now == after && (now != before["state"] || waited >= Duration::from_millis(300));
+            after = now;
+            if rested || waited >= Duration::from_millis(1500) {
+                break;
+            }
+        }
+        let number = |v: &Value, i: usize| v[i].as_f64().unwrap_or(0.);
+        let (was, is) = (before["state"].as_array(), after.as_array());
+        let pairs: Vec<(&Value, &Value)> = match (was, is) {
+            (Some(was), Some(is)) if was.len() == is.len() => was.iter().zip(is).collect(),
+            _ => return Ok(json!({"ok":true,"measured":false})),
+        };
+        // Report the scroller that moved; when none did, the innermost one under the point.
+        let Some((was, is)) = pairs.iter().find(|(was, is)| was != is).or(pairs.first()) else {
+            return Ok(json!({"ok":true,"moved":false,"dx":0,"dy":0}));
+        };
+        let (moved_x, moved_y) = (number(is, 0) - number(was, 0), number(is, 1) - number(was, 1));
+        // Offsets are fractional while the limits are whole pixels: allow one pixel.
+        let stopped = |asked: f64, at: f64, max: f64| {
+            if asked > 0. { at >= max - 1. } else { asked == 0. || at <= 0. }
+        };
+        Ok(json!({
+            "ok": true,
+            "moved": moved_x != 0. || moved_y != 0.,
+            "dx": moved_x, "dy": moved_y,
+            "left": number(is, 0), "top": number(is, 1),
+            "max_left": number(is, 2), "max_top": number(is, 3),
+            "at_end": stopped(dx, number(is, 0), number(is, 2)) && stopped(dy, number(is, 1), number(is, 3)),
+        }))
     }
 
     async fn record_start(&self, ex: &BackgroundExecutor) -> Result<Value, String> {
@@ -699,6 +826,12 @@ impl Control {
             "browser.snapshot" => {
                 // A failed snapshot invalidates all previous refs, too.
                 self.snapshot.borrow_mut().refs.clear();
+                let interactive = match args.get("filter").map(Value::as_str) {
+                    None => false,
+                    Some(Some("interactive")) => true,
+                    Some(Some("all")) => false,
+                    _ => return Err("filter must be interactive or all".into()),
+                };
                 self.call("DOM.enable", json!({}), ex).await?;
                 // Request all descendants so native DOM events also cover closed
                 // shadow roots and frame documents, outside a document observer.
@@ -751,6 +884,9 @@ impl Control {
                 ];
                 let mut lines = Vec::new();
                 let mut seen = std::collections::HashSet::new();
+                let origin = url::Url::parse(after["page"]["url"].as_str().unwrap_or(""))
+                    .map(|u| u.origin().ascii_serialization())
+                    .unwrap_or_default();
                 let mut s = self.snapshot.borrow_mut();
                 s.generation += 1;
                 s.version = after.clone();
@@ -768,6 +904,10 @@ impl Control {
                         continue;
                     }
                     let role = n["role"]["value"].as_str().unwrap_or("unknown");
+                    // Inline boxes repeat their text node and cannot be acted on.
+                    if role == "InlineTextBox" || interactive && !INTERACTIVE.contains(&role) {
+                        continue;
+                    }
                     let name: String = n["name"]["value"]
                         .as_str()
                         .unwrap_or("")
@@ -784,8 +924,20 @@ impl Control {
                     } else {
                         "-".into()
                     };
+                    // Where a link goes or an image comes from, relative on this site.
+                    let target = n["properties"]
+                        .as_array()
+                        .and_then(|p| p.iter().find(|p| p["name"] == "url"))
+                        .and_then(|p| p["value"]["value"].as_str())
+                        .filter(|u| !u.is_empty())
+                        .map(|u| {
+                            let u = u.strip_prefix(&origin).filter(|rest| rest.starts_with('/')).unwrap_or(u);
+                            let cut: String = u.chars().take(300).collect();
+                            format!(" -> {cut}{}", if cut.len() < u.len() { "…" } else { "" })
+                        })
+                        .unwrap_or_default();
                     lines.push(format!(
-                        "{reference} {role} {}",
+                        "{reference} {role} {}{target}",
                         serde_json::to_string(&name).unwrap()
                     ));
                     if lines.len() >= 1000 {
@@ -795,6 +947,61 @@ impl Control {
                 Ok(
                     json!({"url":after["page"]["url"],"title":after["page"]["title"],"generation":s.generation,"tree":lines.join("\n"),"capped":!pending.is_empty()}),
                 )
+            }
+            "browser.eval" => {
+                // The page's own world, like its console: page variables, top-level await.
+                // CLI values that parse as JSON arrive as JSON, which is a JS expression too.
+                let js = match &args["js"] {
+                    Value::String(js) => js.clone(),
+                    Value::Null => return Err("js is required: the JavaScript to evaluate".into()),
+                    other => format!("({other})"),
+                };
+                let timeout = match args.get("timeout") {
+                    None => 5000,
+                    Some(v) => v
+                        .as_u64()
+                        .filter(|v| (1..=120000).contains(v))
+                        .ok_or("timeout must be 1..120000 milliseconds")?,
+                };
+                // Chromium's own timeout stops runaway synchronous code (it answers with an
+                // internal error); ours also bounds a pending promise.
+                let started = Instant::now();
+                let value = self
+                    .call_within(
+                        "Runtime.evaluate",
+                        json!({"expression":js,"replMode":true,"awaitPromise":true,"returnByValue":true,"timeout":timeout}),
+                        Duration::from_millis(timeout + 1000),
+                        ex,
+                    )
+                    .await
+                    .map_err(|e| {
+                        if started.elapsed() >= Duration::from_millis(timeout) {
+                            format!("JavaScript did not finish within {timeout} ms")
+                        } else {
+                            e
+                        }
+                    })?;
+                if let Some(thrown) = value.get("exceptionDetails") {
+                    let detail = thrown["exception"]["description"]
+                        .as_str()
+                        .or(thrown["text"].as_str())
+                        .unwrap_or("unknown error");
+                    return Err(format!("JavaScript threw: {}", detail.chars().take(2000).collect::<String>()));
+                }
+                let result = &value["result"];
+                // Values come back as JSON; what JSON cannot carry (a function, a symbol) as its description.
+                let out = match result.get("value") {
+                    Some(v) => v.clone(),
+                    None => result["unserializableValue"]
+                        .as_str()
+                        .or(result["description"].as_str())
+                        .map_or(Value::Null, |d| Value::String(d.into())),
+                };
+                if out.to_string().len() > EVAL_RESULT {
+                    return Err(format!("Result exceeds {EVAL_RESULT} bytes; return less, e.g. slice or map to the fields needed"));
+                }
+                let page = self.version(ex).await.ok();
+                Ok(json!({"result":out,"type":result["type"],"url":page.as_ref().map(|p| p["page"]["url"].clone())}))
             }
             "browser.read" => {
                 let format = args["format"].as_str().unwrap_or("text");
@@ -880,10 +1087,20 @@ impl Control {
                 Ok(json!({"ok":true}))
             }
             "browser.scroll" => {
-                if args.get("ref").is_some() == args.get("dy").is_some() {
-                    return Err("Pass exactly one of ref or dy".into());
+                let element = args.get("ref").is_some() || args.get("name").is_some();
+                let delta = |key: &str| match args.get(key) {
+                    None => Ok(0.),
+                    Some(v) => v
+                        .as_f64()
+                        .filter(|n| n.is_finite() && n.abs() <= 100000.)
+                        .ok_or(format!("{key} must be a finite number within 100000 pixels")),
+                };
+                let (dx, dy) = (delta("dx")?, delta("dy")?);
+                let wheel = args.get("dx").is_some() || args.get("dy").is_some();
+                if !element && !wheel {
+                    return Err("Pass ref or name to bring an element into view, dy/dx to wheel the page, or both to wheel over that element".into());
                 }
-                if args.get("ref").is_some() {
+                if !wheel {
                     let node = self.node(args, ex).await?;
                     self.call(
                         "DOM.scrollIntoViewIfNeeded",
@@ -891,33 +1108,29 @@ impl Control {
                         ex,
                     )
                     .await?;
-                } else {
-                    let dy = args["dy"]
-                        .as_f64()
-                        .filter(|n| n.is_finite() && n.abs() <= 100000.)
-                        .ok_or("dy must be a finite number within 100000 pixels")?;
-                    self.call(
-                        "Input.dispatchMouseEvent",
-                        json!({"type":"mouseWheel","x":1,"y":1,"deltaX":0,"deltaY":dy}),
-                        ex,
-                    )
-                    .await?;
+                    return Ok(json!({"ok":true}));
                 }
-                Ok(json!({"ok":true}))
+                let point = if element {
+                    Some(self.point(self.node(args, ex).await?, ex).await?)
+                } else {
+                    None
+                };
+                self.wheel(point, dx, dy, ex).await
             }
             "browser.wait" => {
-                let count = ["text", "url", "load"]
+                let count = ["text", "url", "load", "settled"]
                     .iter()
                     .filter(|k| args.get(**k).is_some())
                     .count();
                 if count != 1 {
-                    return Err("Pass exactly one of text, url, or load".into());
+                    return Err("Pass exactly one of text, url, load, or settled".into());
                 }
                 if args.get("text").is_some_and(|v| !v.is_string())
                     || args.get("url").is_some_and(|v| !v.is_string())
                     || args.get("load").is_some_and(|v| v != true)
+                    || args.get("settled").is_some_and(|v| v != true)
                 {
-                    return Err("text/url must be strings; load must be true".into());
+                    return Err("text/url must be strings; load and settled must be true".into());
                 }
                 let timeout = match args.get("timeout") {
                     None => 5000,
@@ -932,6 +1145,8 @@ impl Control {
                         format!("(document.body?.innerText || '').includes({text})")
                     } else if let Some(url) = args.get("url") {
                         format!("location.href.includes({url})")
+                    } else if args.get("settled").is_some() {
+                        SETTLED.into()
                     } else {
                         "document.readyState === 'complete'".into()
                     };
@@ -947,13 +1162,45 @@ impl Control {
                 }
             }
             "browser.screenshot" => {
-                let shot = self
-                    .call(
-                        "Page.captureScreenshot",
-                        json!({"format":"png","captureBeyondViewport":false}),
-                        ex,
-                    )
-                    .await?;
+                let scale = match args.get("scale") {
+                    None => 1.,
+                    Some(v) => v
+                        .as_f64()
+                        .filter(|s| (0.1..=1.).contains(s))
+                        .ok_or("scale must be a number from 0.1 to 1")?,
+                };
+                let format = match args.get("format").map(Value::as_str) {
+                    None | Some(Some("png")) => "png",
+                    Some(Some("jpeg")) => "jpeg",
+                    _ => return Err("format must be png or jpeg".into()),
+                };
+                let full = match args.get("full") {
+                    None => false,
+                    Some(Value::Bool(full)) => *full,
+                    _ => return Err("full must be true or false".into()),
+                };
+                let mut params = json!({"format":format,"captureBeyondViewport":full});
+                if format == "jpeg" {
+                    params["quality"] = 85.into();
+                }
+                let mut capped = false;
+                if full || scale != 1. {
+                    // A clip is in page coordinates; its scale is relative to device pixels.
+                    let metrics = self.call("Page.getLayoutMetrics", json!({}), ex).await?;
+                    let number = |v: &Value| v.as_f64().filter(|n| n.is_finite()).ok_or("Page has no layout");
+                    let view = &metrics["cssVisualViewport"];
+                    let (x, y, width, mut height) = if full {
+                        let content = &metrics["cssContentSize"];
+                        (0., 0., number(&content["width"])?, number(&content["height"])?)
+                    } else {
+                        (number(&view["pageX"])?, number(&view["pageY"])?, number(&view["clientWidth"])?, number(&view["clientHeight"])?)
+                    };
+                    if height > FULL_HEIGHT {
+                        (height, capped) = (FULL_HEIGHT, true);
+                    }
+                    params["clip"] = json!({"x":x,"y":y,"width":width,"height":height,"scale":scale});
+                }
+                let shot = self.call("Page.captureScreenshot", params, ex).await?;
                 let encoded = shot["data"]
                     .as_str()
                     .filter(|s| s.len() <= 48 * 1024 * 1024)
@@ -964,12 +1211,13 @@ impl Control {
                 let dir = crate::mods::app_dir().join("screenshots");
                 std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
                 let path = dir.join(format!(
-                    "browser-{}-{}.png",
+                    "browser-{}-{}.{}",
                     std::process::id(),
                     std::time::SystemTime::now()
                         .duration_since(std::time::UNIX_EPOCH)
                         .map_err(|e| e.to_string())?
-                        .as_nanos()
+                        .as_nanos(),
+                    if format == "jpeg" { "jpg" } else { "png" }
                 ));
                 use std::io::Write;
                 let mut file = std::fs::OpenOptions::new()
@@ -978,12 +1226,22 @@ impl Control {
                     .open(&path)
                     .map_err(|e| e.to_string())?;
                 file.write_all(&bytes).map_err(|e| e.to_string())?;
-                Ok(json!({"path":path}))
+                let mut result = json!({"path":path});
+                if capped {
+                    result["capped"] = true.into();
+                }
+                Ok(result)
             }
             _ => Err(format!("Unknown browser command: {command}")),
         }
     }
 }
+
+/// Largest browser.eval result, as JSON text.
+const EVAL_RESULT: usize = 200_000;
+
+/// Tallest full-page capture, in CSS pixels; a longer page is cut there and says so.
+const FULL_HEIGHT: f64 = 20000.;
 
 const RECORD_CURSOR: &str = r#"(() => {
   if (window.__herdrRecordStop) return;

@@ -1204,11 +1204,23 @@ this task. This is an accidental-access guard, not authentication.
 
 Page commands return their result through `herdr-browser do`:
 
-- `browser.snapshot {pane?, scope?}`: accessibility tree as compact `e12 button
-  "Sign in"` lines, URL, title and generation. Optional `scope` is a CSS selector.
+- `browser.snapshot {pane?, scope?, filter?: "interactive" | "all"}`: accessibility
+  tree as compact `e12 button "Sign in"` lines, URL, title and generation. Links and
+  images end with where they point, `e7 link "" -> /explore` (site-relative on the
+  page's own origin), so unlabeled icons and lists of links can be told apart.
+  Optional `scope` is a CSS selector; `filter: "interactive"` keeps only controls.
   At most 1000 nodes, with names capped to 300 characters; `capped` says if cut.
 - `browser.read {pane?, format?: "text" | "markdown"}`: rendered visible text,
   URL and title, capped to 20000 characters. Markdown is escaped plain text.
+- `browser.eval {pane?, js, timeout?}`: evaluate JavaScript in the page, like its
+  console: page variables, top-level `await`, and the last expression's value back as
+  JSON in `result` (up to 200000 bytes; return only the fields needed). One call can
+  list a page's links, count items or read its state, where a snapshot would take
+  several. It reads and does whatever the page can, including field values and
+  storage, with the page's sign-in: on a person pane pass `confirmed` only for a
+  page the owner authorized for this task, and never return secrets. Timeout is in
+  milliseconds (default 5000, maximum 120000). Never call `alert`, `confirm` or
+  `prompt`: a dialog blocks the page.
 - `browser.click {pane?, ref? | name, role?, nth?}`: click a snapshot element, or
   the one whose accessible name is exactly `name` (no snapshot needed). Without
   `role` only interactive roles match; `role`/`nth` (1-based) pick among several.
@@ -1226,14 +1238,26 @@ Page commands return their result through `herdr-browser do`:
   command answers it, under the same host rule.
 - `browser.press {pane?, key}`: a page key such as Enter, Tab, Escape,
   ArrowDown, or a character/chord such as `Meta+a`. Password input is refused.
-- `browser.scroll {pane?, ref? | name | dy}`: scroll an element into view or wheel the
-  page by `dy` CSS pixels; pass exactly one.
-- `browser.wait {pane?, text? | url? | load?, timeout?}`: wait for visible text,
-  a URL substring or `load: true`. Pass exactly one condition. Timeout is in
-  milliseconds (default 5000, maximum 120000); returns `timeout: true` if unmet.
-- `browser.screenshot {pane?}`: page-only PNG path under the app home's
-  `screenshots/`, including when the window is not key. Before the first pane
-  paint, Chromium uses a provisional viewport based on the window size; the
+- `browser.scroll {pane?, ref? | name, dy?, dx?}`: with only `ref`/`name`, scroll that
+  element into view. With `dy`/`dx` (CSS pixels), wheel at the middle of the page, or
+  over the element when one is also given (a list that scrolls inside the page). A
+  wheel replies with what moved: `moved`, `dy`/`dx` actually scrolled, `top`/`left`
+  and `max_top`/`max_left` of the scroller, and `at_end` once it can go no further
+  that way. `moved: false` means nothing scrolled there. `measured: false`: the
+  wheel went into a frame.
+- `browser.wait {pane?, text? | url? | load? | settled?, timeout?}`: wait for visible
+  text, a URL substring, `load: true`, or `settled: true` (loaded, the images in view
+  arrived and the DOM quiet for 400 ms: use it after a scroll or click before a
+  screenshot). Pass exactly one condition. Timeout is in milliseconds (default 5000,
+  maximum 120000); returns `timeout: true` if unmet, as a page that never rests does.
+- `browser.screenshot {pane?, scale?, format?: "png" | "jpeg", full?}`: page-only
+  image path under the app home's `screenshots/`, including when the window is not
+  key. `scale` (0.1 to 1) shrinks it: 0.5 on a Retina display is one image pixel per
+  CSS pixel, a quarter of the bytes. `full: true` captures the whole document, not
+  only the viewport (up to 20000 CSS pixels tall, `capped: true` beyond); a page that
+  scrolls inside an element still shows one screenful, so scroll it. A wide page
+  shows more per capture in a tab (`place: "tab"`) than in a split. Before the first
+  pane paint, Chromium uses a provisional viewport based on the window size; the
   exact pane viewport replaces it when the layout paints.
 - `browser.record {pane?, action}`: `start` records the page (Chromium's own frames, no
   desktop capture or Screen Recording permission) with a drawn cursor and click ripples;
@@ -1257,7 +1281,10 @@ herdr-browser do browser.click --ref e12
 herdr-browser do browser.type --name Email --text me@example.com
 herdr-browser do browser.signin --item "My Site"
 herdr-browser do browser.read --format markdown
-herdr-browser do browser.screenshot
+herdr-browser do browser.eval --js '[...document.links].map(a => a.href)'
+herdr-browser do browser.scroll --dy 800
+herdr-browser do browser.wait --settled true
+herdr-browser do browser.screenshot --scale 0.5
 ```
 
 Playwright (full API) on agent panes: `browser.cdp {pane?}` on an agent-profile

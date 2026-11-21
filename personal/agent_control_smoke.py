@@ -19,6 +19,8 @@ ROOT = Path(__file__).resolve().parents[1]
 PAGE = b'''<!doctype html><title>Agent control fixture</title>
 <style>body{font:20px system-ui;padding:25px}input,button{font:inherit}</style>
 <main><h1>Agent control fixture</h1>
+<div style="width:180px;height:100px;overflow:auto;border:1px solid" onscroll="document.querySelector('#boxed').textContent='Box scrolled'"><button>Inner top</button><div style="height:600px"></div></div><p id="boxed"></p>
+<img alt="Dot" src="data:image/gif;base64,R0lGODlhAQABAAAAACw=">
 <button onclick="document.querySelector('#result').textContent='Clicked safely'">Click me</button>
 <form onsubmit="event.preventDefault();document.querySelector('#result').textContent='Submitted: '+document.querySelector('#name').value">
 <label>Name <input id="name" autocomplete="off"></label>
@@ -184,19 +186,61 @@ def main():
         assert path.is_relative_to(home / 'screenshots') and path.read_bytes().startswith(b'\x89PNG\r\n\x1a\n')
         assert min(struct.unpack('>II', path.read_bytes()[16:24])) > 100, 'Capture has no usable viewport'
         (work / 'page.png').write_bytes(path.read_bytes())
+        size = lambda shot: struct.unpack('>II', Path(shot['path']).read_bytes()[16:24])
+        whole, half = size(shot), size(command('browser.screenshot', scale=.5))
+        assert all(abs(a - 2 * b) <= 2 for a, b in zip(whole, half)), (whole, half)
+        # The fixture is taller than any pane: a full capture has to outgrow the viewport.
+        assert size(command('browser.screenshot', full=True))[1] > whole[1]
+        jpeg = Path(command('browser.screenshot', format='jpeg')['path'])
+        assert jpeg.suffix == '.jpg' and jpeg.read_bytes().startswith(b'\xff\xd8')
+        command('browser.screenshot', scale=2, expect_error='scale must be')
+        # Page-world JavaScript: values, awaited promises, thrown errors, runaway code.
+        assert command('browser.eval', js='document.title')['result'] == 'Agent control fixture'
+        assert command('browser.eval', js='await Promise.resolve(41) + 1')['result'] == 42
+        assert command('browser.eval', js="[...document.links].map(a => a.getAttribute('href'))")['result'] == ['/next']
+        assert command('browser.eval', js=[1, 2])['result'] == [1, 2]
+        command('browser.eval', js='nope()', expect_error='JavaScript threw: ReferenceError')
+        command('browser.eval', js='for (;;) {}', timeout=300, expect_error='did not finish within 300 ms')
+        command('browser.eval', js="'x'.repeat(300000)", expect_error='Result exceeds')
+        command('browser.eval', expect_error='needs js')
+        assert command('browser.eval', js='1 + 1')['result'] == 2, 'the page must survive a stopped script'
+        command('browser.wait', settled=True)
+        snap = command('browser.snapshot')
+        assert 'InlineTextBox' not in snap['tree'] and 'link "Next page" -> /next' in snap['tree'], snap['tree']
+        assert 'image "Dot" -> data:image/gif' in snap['tree'], snap['tree']
+        controls = command('browser.snapshot', filter='interactive')['tree']
+        assert 'link "Next page" -> /next' in controls and 'StaticText' not in controls and 'heading' not in controls, controls
         snap = command('browser.snapshot')
         command('browser.click', ref=ref(snap, 'textbox', 'Name'))
         command('browser.press', key='Tab')
         command('browser.wait', text='Tab received')
-        command('browser.scroll', dy=700)
+        # The wheel lands mid-page, not on a corner, and says what it moved.
+        moved = command('browser.scroll', dy=700)
         command('browser.wait', text='Scroll received')
+        # Chromium decides the distance (743.5 px for a 700 px wheel here); the reply is what it measured.
+        assert moved['moved'] and not moved['at_end'] and 500 < moved['dy'] < 900 and moved['dy'] <= moved['top'] < moved['max_top'], moved
+        assert 'Box scrolled' not in command('browser.read')['text']
+        end = command('browser.scroll', dy=100000)
+        assert end['moved'] and end['at_end'], end
+        stuck = command('browser.scroll', dy=500)
+        assert stuck['moved'] is False and stuck['dy'] == 0 and stuck['at_end'], stuck
+        assert command('browser.scroll', dy=-100000)['top'] == 0
+        # With an element, the wheel goes to the scroller around it, not the page,
+        # even straight after the page's own wheel (Chromium would latch onto the page).
+        inner = command('browser.scroll', name='Inner top', dy=200)
+        command('browser.wait', text='Box scrolled')
+        assert inner['moved'] and not inner['at_end'] and 100 < inner['top'] < 300 < inner['max_top'] < 1000, inner
+        command('browser.scroll', expect_error='Pass ref or name')
+        command('browser.scroll', name='Inner top')
         person = command('browser.open', profile='person', url=url, caller='qa-terminal-b')
         command('browser.read', pane=person['pane'], expect_error='person-profile')
+        command('browser.eval', pane=person['pane'], js='document.title', expect_error='person-profile')
         command('browser.navigate', pane=person['pane'], url=url, expect_error='person-profile')
         # Explicit agent target continues to work even while person pane is selected.
         assert command('browser.read')['pane'] == pane
         command('browser.inspect', pane=person['pane'], confirmed=True)
         command('browser.wait', pane=person['pane'], confirmed=True, load=True)
+        assert command('browser.eval', pane=person['pane'], confirmed=True, js='document.title')['result'] == 'Agent control fixture'
         assert 'profile_marker=agent-only' not in command('browser.read', pane=person['pane'], confirmed=True)['text']
         command('browser.read', caller='unknown', expect_error='Pass pane explicitly')
         # Navigate invalidates refs even when URL returns to the same page.

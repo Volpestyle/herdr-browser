@@ -29,7 +29,7 @@ Remote connections use SSH through the core.
 
 ## Native browser panes (personal fork, macOS)
 
-The `browser.snapshot`, `browser.read`, `browser.click`, `browser.type`,
+The `browser.snapshot`, `browser.read`, `browser.eval`, `browser.click`, `browser.type`,
 `browser.press`, `browser.scroll`, `browser.wait` and `browser.screenshot`
 commands use that same local socket trust line. They reach only the named
 pane's CEF browser through its in-process DevTools message observer. No network
@@ -38,6 +38,15 @@ switch; do not enable it for ordinary agent control. Page input uses Chromium
 `Input` events, never the desktop pointer, OS keys or window activation.
 Screenshots capture the page, not the screen, and stay under the app home's
 `screenshots/` directory. They and returned page text can contain private data.
+
+`browser.eval` runs JavaScript in the page's own world through the same
+observer. It has the page's full reach: field values (passwords included),
+cookies and storage scripts can see, and requests made with the page's
+sign-in. `browser.type`'s password refusal does not apply to it. Its only gate
+on a person pane is `confirmed: true`, the same mistake guard as the other
+commands and no stronger; results come back over the control socket and so
+carry its trust line. Website JavaScript still receives no bridge to Herdr:
+the result leaves through DevTools, not through anything the page can call.
 
 `browser.cdp` gives Playwright raw CDP over a bridge, not Chromium's debugging
 port: Herdr reserves fds 3/4 at startup, launches Chromium with
