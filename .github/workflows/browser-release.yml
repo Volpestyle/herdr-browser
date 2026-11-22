@@ -81,11 +81,11 @@ jobs:
           export CEF_PATH="$HOME/.local/share/herdr-browser/cef"
           cargo build --release --bins
 
-      - name: Run unit tests and refresh notices
+      - name: Run browser and packaging tests, refresh notices
         run: |
           python3 -m unittest discover -s personal -p 'test_*.py'
           sh -n personal/install.sh
-          cargo test --release --locked --bin herdr-app -- --test-threads=1
+          cargo test --release --locked --bin herdr-app browser:: -- --test-threads=1
           bun scripts/notices.ts
 
       - name: Package, sign, and notarize stock-CEF release
