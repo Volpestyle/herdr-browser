@@ -252,14 +252,18 @@ def framework_cef_version(framework):
     return '.'.join(info['CFBundleShortVersionString'].split('.')[:3])
 
 
-def install_cef_framework(stock, frameworks):
+def install_cef_framework(stock, frameworks, *, stock_only=False):
     """Put the pinned codec framework in the bundle, or stock when CEF has moved past it.
 
     A codec framework only fits the CEF it was built from, and a Chromium security
     update outranks H.264, so a different CEF ships stock and says so. At the pinned
     version a missing or changed archive is an error: H.264 never disappears silently.
+    Public releases pass stock_only=True to always ship stock CEF without proprietary codecs.
     """
     version = framework_cef_version(stock)
+    if stock_only:
+        shutil.copytree(stock, frameworks / stock.name, symlinks=True)
+        return {'h264': False, 'cef': version, 'stock': True}
     if version != CEF_CODEC_VERSION:
         warning = (f'CEF {version} has no codec build (pinned {CEF_CODEC_VERSION}): this build uses stock '
                    'CEF, so H.264/AAC video will not play until the codec framework is rebuilt and repinned.')
@@ -294,7 +298,50 @@ def codec_warning(state):
     return next((build['codecs']['warning'] for build in builds if build and 'warning' in build.get('codecs', {})), None)
 
 
-def package(binary, destination, version, source, patch_hash, *, bundle_id="dev.james.herdr-browser"):
+RELEASE_ENTITLEMENTS = {
+    'com.apple.security.cs.allow-jit': True,
+    'com.apple.security.cs.allow-unsigned-executable-memory': True,
+    'com.apple.security.device.audio-input': True,
+    'com.apple.security.device.camera': True,
+    'com.apple.security.automation.apple-events': True,
+}
+
+
+def sign_bundle_inside_out(destination, identity, entitlements, *, hardened_runtime=True, timestamp=True, keychain=None):
+    """Sign nested CEF libraries, helper apps, and finally the outer bundle for notarization."""
+    base = ['/usr/bin/codesign', '--force']
+    if hardened_runtime:
+        base += ['--options', 'runtime']
+    base += ['--timestamp' if timestamp else '--timestamp=none']
+    if keychain:
+        base += ['--keychain', str(keychain)]
+    base += ['--sign', identity]
+
+    frameworks = destination / 'Contents/Frameworks'
+    cef_fw = frameworks / CEF_FRAMEWORK
+    if cef_fw.is_dir():
+        libraries = cef_fw / 'Libraries'
+        if libraries.is_dir():
+            for dylib in sorted(libraries.glob('*.dylib')):
+                if not dylib.is_symlink():
+                    run([*base, dylib])
+        helpers_dir = cef_fw / 'Helpers'
+        if helpers_dir.is_dir():
+            for item in sorted(helpers_dir.iterdir()):
+                if item.is_file() and not item.is_symlink():
+                    run([*base, item])
+        run([*base, cef_fw])
+
+    for helper_app in sorted(frameworks.glob('HerdrBrowser Helper*.app')):
+        run([*base, '--entitlements', entitlements, helper_app])
+
+    run([*base, '--entitlements', entitlements, destination])
+
+
+def package(binary, destination, version, source, patch_hash, *,
+            bundle_id="dev.james.herdr-browser", stock_only=False,
+            sign_identity=None, hardened_runtime=False, timestamp=False,
+            keychain=None, entitlements_dict=None):
     macos = destination / 'Contents/MacOS'
     resources = destination / 'Contents/Resources'
     macos.mkdir(parents=True)
@@ -303,9 +350,15 @@ def package(binary, destination, version, source, patch_hash, *, bundle_id="dev.
     shutil.copy2(source / 'assets/icons/Herdr.icns', resources / 'Herdr.icns')
     for name in ['LICENSE', 'THIRD-PARTY-NOTICES']:
         shutil.copy2(source / name, resources / name)
+    opener_script = source / 'personal/browser_open.py'
+    if not opener_script.is_file():
+        opener_script = ROOT / 'personal/browser_open.py'
+    if opener_script.is_file():
+        shutil.copy2(opener_script, resources / 'browser_open.py')
+        (resources / 'browser_open.py').chmod(0o755)
     helper = binary.parent / 'herdr-browser-helper'
     cef_environment = os.environ.copy()
-    cef_environment['CEF_PATH'] = str(Path.home() / '.local/share/herdr-browser/cef')
+    cef_environment.setdefault('CEF_PATH', str(Path.home() / '.local/share/herdr-browser/cef'))
     cef_dir = Path(run([helper, '--print-cef-path'], env=cef_environment, capture=True).stdout.decode().strip())
     credits = cef_dir / 'CREDITS.html'
     if credits.exists(): shutil.copy2(credits, resources / 'Chromium-Credits.html')
@@ -313,7 +366,7 @@ def package(binary, destination, version, source, patch_hash, *, bundle_id="dev.
     frameworks.mkdir()
     framework = cef_dir / CEF_FRAMEWORK
     if not framework.is_dir(): framework = cef_dir / 'Release' / CEF_FRAMEWORK
-    codecs = install_cef_framework(framework, frameworks)
+    codecs = install_cef_framework(framework, frameworks, stock_only=stock_only)
     for role in ['', ' (GPU)', ' (Renderer)', ' (Plugin)', ' (Alerts)']:
         name = 'HerdrBrowser Helper' + role
         contents = frameworks / f'{name}.app/Contents'
@@ -339,13 +392,23 @@ def package(binary, destination, version, source, patch_hash, *, bundle_id="dev.
         plistlib.dump(info, output)
     validate_browser_bundle(destination)
     entitlements = destination.parent / 'chromium-entitlements.plist'
+    entitlements_payload = entitlements_dict if entitlements_dict is not None else (
+        RELEASE_ENTITLEMENTS if hardened_runtime else {'com.apple.security.cs.allow-jit': True}
+    )
     with entitlements.open('wb') as output:
-        plistlib.dump({'com.apple.security.cs.allow-jit': True}, output)
-    identity_file = LOCAL / 'signing_identity'
-    if bundle_id == 'dev.james.herdr-browser' and not identity_file.exists():
-        raise RuntimeError('Configure a stable personal signing identity before packaging automatic updates')
-    identity = identity_file.read_text().strip() if identity_file.exists() else '-'
-    run(['/usr/bin/codesign', '--force', '--deep', '--sign', identity, '--timestamp=none', '--entitlements', entitlements, destination])
+        plistlib.dump(entitlements_payload, output)
+    if sign_identity is not None:
+        identity = sign_identity
+    else:
+        identity_file = LOCAL / 'signing_identity'
+        if bundle_id == 'dev.james.herdr-browser' and not identity_file.exists():
+            raise RuntimeError('Configure a stable personal signing identity before packaging automatic updates')
+        identity = identity_file.read_text().strip() if identity_file.exists() else '-'
+    if hardened_runtime or timestamp or keychain:
+        sign_bundle_inside_out(destination, identity, entitlements,
+                               hardened_runtime=hardened_runtime, timestamp=timestamp, keychain=keychain)
+    else:
+        run(['/usr/bin/codesign', '--force', '--deep', '--sign', identity, '--timestamp=none', '--entitlements', entitlements, destination])
     run(['/usr/bin/codesign', '--verify', '--deep', '--strict', destination])
     listing = run([macos / 'HerdrBrowser', 'commands'], capture=True).stdout
     commands = {item['name'] for item in json.loads(listing)}

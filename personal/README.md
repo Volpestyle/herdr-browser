@@ -46,7 +46,45 @@ herdr-core session unless `HC_SESSION` selects another one. Browser engine
 replacement uses a new Chromium profile; existing Safari/WebKit sign-ins are
 not imported.
 
-## Automatic updates
+## Public releases (macOS Apple Silicon)
+
+Public releases are built on demand by
+[`.github/workflows/browser-release.yml`](../.github/workflows/browser-release.yml)
+using [`personal/package_release.py`](package_release.py). The workflow runs only
+on `browser-v*` tags or explicit `workflow_dispatch` (never on branch pushes),
+packages stock Chromium/CEF (no proprietary H.264/AAC codecs), bundles a
+standalone `browser_open.py` inside `Herdr Browser.app/Contents/Resources/`,
+signs inside-out with hardened runtime, notarizes and staples both the `.app`
+(for `herdr-browser-macos-aarch64.tar.gz`) and `Herdr-Browser-macos-aarch64.dmg`,
+and publishes `SHA256SUMS` to GitHub Releases.
+
+Required secrets in the repository's `release` environment for signed and
+notarized public releases:
+
+- `APPLE_CERTIFICATE_P12` — base64-encoded Developer ID Application `.p12`
+- `APPLE_CERTIFICATE_PASSWORD` — password for the `.p12`
+- `APPLE_API_KEY` — App Store Connect API `.p8` private key contents
+- `APPLE_API_KEY_ID` — App Store Connect API Key ID
+- `APPLE_API_ISSUER` — App Store Connect Issuer UUID
+
+Keep the same Developer ID signing identity across releases so macOS
+Accessibility and Screen Recording grants attached to `Herdr Browser.app` (for
+agents running `agent-desktop` inside Herdr terminals) stay intact across
+updates.
+
+To test packaging locally without Apple secrets:
+
+```sh
+python3 personal/package_release.py --binary target/release/herdr-app --allow-adhoc
+```
+
+Public users install or update with:
+
+```sh
+curl -fsSL https://raw.githubusercontent.com/Volpestyle/herdr-browser/james/native-browser/personal/install.sh | sh
+```
+
+## Automatic updates (personal checkout)
 
 `~/Library/LaunchAgents/dev.james.herdr-browser-updater.plist` invokes the local
 updater every 15 minutes. At most every six hours it checks:

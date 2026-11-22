@@ -38,15 +38,30 @@ normal JavaScript-only mod with the current API.
 
 ## Draft showcase message (not posted)
 
-I made an experimental macOS/Apple silicon fork of the Herdr desktop app with
-native Chromium browser tabs beside the agents. It embeds CEF directly in
-GPUI, with normal page rendering/input and tab shortcuts. I've been using
-Linear in it, including Google sign-in. There's also a local updater that
-reapplies the patch to Herdr releases and builds stable CEF updates, keeping
-the installed version when a build or patch fails.
+I built an Apple Silicon macOS fork of `herdr-app` with native Chromium (CEF)
+browser panes right beside the terminals and coding agents, plus in-process
+agent browser controls over the existing Herdr control socket.
+
+What's working in it today:
+- Native CEF child views embedded directly in GPUI (normal page rendering,
+  Retina scaling, extensions, persistent storage, tab/address shortcuts,
+  `browser.markdown` live Markdown + Mermaid previews).
+- In-process agent browser commands (`browser.snapshot`, `browser.read`,
+  `browser.click`, `browser.type`, `browser.press`, `browser.scroll`,
+  `browser.wait`, `browser.screenshot`, `browser.record`, `browser.signin`)
+  using CEF's in-process DevTools API — no open localhost debug port, and
+  background-safe (clicks/keys never steal focus or move the pointer).
+- A separate `agent` Chromium profile (`browser.open --profile agent`) isolated
+  from the user's `person` profile, with `person` panes refused unless
+  explicitly confirmed and password fields refused in `browser.type`.
+- A guarded `browser.cdp` pipe scoped to agent-profile pages for Playwright.
+- Stock `herdr-core` (`hc`) untouched, separate `~/.config/herdr-app-browser`
+  config dir, and a stock-CEF macOS release pipeline.
 
 Source: https://github.com/Volpestyle/herdr-browser
 
-I saw the earlier herdr-browser work and penso's native client. This version
-keeps the official desktop app as its base and uses Chromium on macOS. Would
-a small native browser host API be useful upstream? Happy to compare notes.
+I saw the earlier `herdr-browser` experiments and `penso/herdr-gpui`. Keeping
+this on top of `herdr-app` with in-process commands on the existing control
+socket has made side-by-side coding-agent + browser workflows noticeably smooth.
+Would a small native browser host API (and/or these pane-scoped `browser.*`
+command semantics) be useful upstream? Happy to demo or compare notes.

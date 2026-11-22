@@ -1,14 +1,36 @@
-# Herdr
+# Herdr Browser
 
-This fork adds native Chromium/CEF browser tabs to Herdr's Rust/GPUI desktop
-app. The current build targets macOS on Apple silicon.
+An Apple Silicon macOS fork of [Herdr](https://github.com/herdrdev/herdr-app) that
+embeds native Chromium (CEF) browser tabs right beside your terminals and coding
+agents, with in-process agent browser controls (`browser.snapshot`, `browser.click`,
+`browser.type`, `browser.signin`, `browser.screenshot`, `browser.record`, and a
+guarded Playwright `browser.cdp` pipe) and an isolated `agent` profile.
 
-[Features and automatic updates](personal/README.md) ·
-[Installation and migration](personal/ANOTHER-MAC.md) ·
-[Related projects](personal/COMMUNITY.md)
+It keeps upstream `herdr-core` (`hc`) untouched and stores its own configuration in
+`~/.config/herdr-app-browser`, so it can sit cleanly beside stock Herdr.
 
-The guide below describes upstream Herdr. Its installation commands install
-the upstream app; follow the installation guide above for this fork.
+### Install Herdr Browser (macOS Apple Silicon)
+
+Once a signed `browser-v*` release is published on [GitHub Releases](https://github.com/Volpestyle/herdr-browser/releases):
+
+```sh
+curl -fsSL https://raw.githubusercontent.com/Volpestyle/herdr-browser/james/native-browser/personal/install.sh | sh
+```
+
+The installer verifies SHA-256 checksums, places `Herdr Browser.app` in
+`~/Applications`, links `herdr-browser` and `herdr-browser-open` into
+`~/.local/bin`, and installs upstream `herdr-core` if missing. Public releases
+ship stock Chromium/CEF (no proprietary H.264/AAC codecs).
+
+[Features, releases, and automatic updates](personal/README.md) ·
+[Transferring or building from source](personal/ANOTHER-MAC.md) ·
+[Related projects and upstream note](personal/COMMUNITY.md)
+
+---
+
+The guide below describes upstream [Herdr](https://github.com/herdrdev/herdr-app).
+Its installation commands install the stock upstream app (which also supports
+Linux and Windows); use the installer above for this macOS browser fork.
 
 Herdr is a desktop app for terminals and coding agents. Keep work in spaces, see which agents need you, and leave terminals running when you close the window.
 

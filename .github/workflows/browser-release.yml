@@ -1,0 +1,143 @@
+# Public Apple Silicon macOS release of Herdr Browser (stock CEF).
+# Runs ONLY on browser-v* tags or explicit workflow_dispatch — never on branch pushes.
+#
+# Required repository/environment secrets for signed + notarized public releases:
+#   APPLE_CERTIFICATE_P12       Base64-encoded Developer ID Application .p12
+#   APPLE_CERTIFICATE_PASSWORD  Password for the .p12
+#   APPLE_API_KEY               App Store Connect API .p8 private key contents
+#   APPLE_API_KEY_ID            App Store Connect API Key ID
+#   APPLE_API_ISSUER            App Store Connect Issuer UUID
+name: herdr-browser macOS release
+
+on:
+  push:
+    tags: ["browser-v*"]
+  workflow_dispatch:
+    inputs:
+      allow_unsigned:
+        description: "Allow ad-hoc unsigned dry-run build (never publishes a GitHub Release)"
+        type: boolean
+        default: false
+
+permissions:
+  contents: write
+
+concurrency:
+  group: browser-release-${{ github.ref }}
+  cancel-in-progress: false
+
+env:
+  RUST_TOOLCHAIN: 1.95.0
+  ZIG_VERSION: 0.16.0
+  CARGO_ABOUT_VERSION: 0.9.3
+
+jobs:
+  release-macos:
+    if: github.repository == 'Volpestyle/herdr-browser'
+    runs-on: macos-15
+    environment: ${{ github.ref_type == 'tag' && 'release' || 'build' }}
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          submodules: true
+          persist-credentials: false
+
+      - uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8 # master
+        with:
+          toolchain: ${{ env.RUST_TOOLCHAIN }}
+
+      - uses: mlugg/setup-zig@d1434d08867e3ee9daa34448df10607b98908d29 # v2.2.1
+        with:
+          version: ${{ env.ZIG_VERSION }}
+
+      - uses: oven-sh/setup-bun@v2
+
+      - name: Restore Rust and CEF caches
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: |
+            ~/.cargo/registry/index
+            ~/.cargo/registry/cache
+            ~/.cargo/git/db
+            ~/.local/share/herdr-browser/cef
+            target
+          key: browser-release-macos-arm64-${{ env.RUST_TOOLCHAIN }}-zig${{ env.ZIG_VERSION }}-${{ hashFiles('Cargo.lock') }}
+          restore-keys: |
+            browser-release-macos-arm64-${{ env.RUST_TOOLCHAIN }}-zig${{ env.ZIG_VERSION }}-
+
+      - name: Install packaging tools
+        run: |
+          brew install create-dmg
+          if ! command -v cargo-about >/dev/null 2>&1; then
+            cargo install --locked cargo-about --version "${{ env.CARGO_ABOUT_VERSION }}"
+          fi
+
+      - name: Build release binaries
+        run: |
+          mkdir -p "$HOME/.local/share/herdr-browser/cef"
+          export CEF_PATH="$HOME/.local/share/herdr-browser/cef"
+          cargo build --release --bins
+
+      - name: Run unit tests and refresh notices
+        env:
+          CEF_PATH: ${{ env.HOME }}/.local/share/herdr-browser/cef
+        run: |
+          python3 -m unittest discover -s personal -p 'test_*.py'
+          sh -n personal/install.sh
+          cargo test --locked --bin herdr-app -- --test-threads=1
+          bun scripts/notices.ts
+
+      - name: Package, sign, and notarize stock-CEF release
+        env:
+          CEF_PATH: ${{ env.HOME }}/.local/share/herdr-browser/cef
+          APPLE_CERTIFICATE_P12: ${{ secrets.APPLE_CERTIFICATE_P12 }}
+          APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
+          APPLE_API_KEY: ${{ secrets.APPLE_API_KEY }}
+          APPLE_API_KEY_ID: ${{ secrets.APPLE_API_KEY_ID }}
+          APPLE_API_ISSUER: ${{ secrets.APPLE_API_ISSUER }}
+        run: |
+          args=(--binary target/release/herdr-app --out-dir dist)
+          if [ "${{ github.ref_type }}" = "tag" ]; then
+            version="${GITHUB_REF_NAME#browser-v}"
+            args+=(--version "$version" --dmg --notarize)
+          elif [ -n "${APPLE_CERTIFICATE_P12:-}" ]; then
+            args+=(--dmg)
+            if [ -n "${APPLE_API_KEY:-}" ]; then
+              args+=(--notarize)
+            fi
+          elif [ "${{ inputs.allow_unsigned }}" = "true" ]; then
+            args+=(--allow-adhoc)
+          else
+            echo "Set APPLE_CERTIFICATE_P12 / APPLE_CERTIFICATE_PASSWORD secrets, or re-run with allow_unsigned=true for a dry run." >&2
+            exit 1
+          fi
+          python3 personal/package_release.py "${args[@]}"
+          ls -lh dist/
+          cat dist/SHA256SUMS
+
+      - name: Upload release artifacts
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: herdr-browser-macos-aarch64
+          path: dist/*
+          if-no-files-found: error
+          retention-days: 14
+
+      - name: Publish GitHub Release
+        if: github.event_name == 'push' && github.ref_type == 'tag'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          notes=$(printf '%s\n' \
+            "Apple Silicon macOS release of Herdr Browser (stock Chromium/CEF, notarized)." \
+            "" \
+            "Install or update:" \
+            '```sh' \
+            "curl -fsSL https://raw.githubusercontent.com/Volpestyle/herdr-browser/james/native-browser/personal/install.sh | sh" \
+            '```' \
+            "" \
+            "Note: Public releases ship stock Chromium/CEF without proprietary H.264/AAC codecs.")
+          gh release create "$GITHUB_REF_NAME" dist/* \
+            --title "Herdr Browser $GITHUB_REF_NAME" \
+            --notes "$notes"
