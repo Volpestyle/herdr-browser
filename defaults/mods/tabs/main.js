@@ -106,8 +106,8 @@ export default class Tabs extends View {
       const lead = panes().find(p => p.tab === c.id && p.program?.agent) ?? panes().find(p => p.tab === c.id);
       const program = lead?.program, browser = lead?.mod === "native-browser";
       const name = label(c, lead);
-      const pin = pinned.includes(c.id), icon = browser || Boolean(program?.icon);
-      return h_flex().id(`tab-${c.id}`).h(29).px(pin ? 8 : 10).gap(7).rounded(7).items_center().flex_none().text_size(12.8)
+      const pin = pinned.includes(c.id);
+      return h_flex().id(`tab-${c.id}`).h(29).px(pin ? 9 : 10).gap(7).rounded(7).items_center().flex_none().text_size(12.8)
         // A rename or status dot on this or an earlier tab can push the active one out.
         .when(i <= active, el => el.on_size_change((_size, cx) => { this.scroll.scroll_to_item(active); cx.notify(); }))
         .border(1).border_color(c.active ? t.border : t.chrome).bg(c.active ? t.raised : t.chrome).text_color(c.active ? t.foreground : t.muted)
@@ -122,9 +122,10 @@ export default class Tabs extends View {
         .when(browser, el => el.child(svg("mods/native-browser/browser.svg").size(13).flex_none().text_color(t.muted)))
         .when(pin, el => el.tooltip(name))
         .when(Boolean(program?.icon), el => el.child(program.tint ? svg(program.icon).size(14).text_color(t.muted) : image(program.icon).size(14)))
-        .when(!pin || !icon, el => el.child(div().max_w(pin ? 60 : 170).truncate().child(c.zoomed ? `${name} Z` : name)))
+        .child(div().max_w(pin ? 110 : 170).truncate().child(c.zoomed ? `${name} Z` : name))
         .when(c.status === "working", el => el.child(svg("mods/workspace-chrome/spinner.svg").size(12).flex_none().text_color(t.working).spin(900)))
         .when(c.status === "blocked" || c.status === "done", el => el.child(div().size(6).rounded(3).bg(t[c.status])))
+        .when(pin, el => el.child(svg("mods/workspace-chrome/pin.svg").size(11).flex_none().text_color(t.dim)))
         .when(c.active && !pin, el => el.child(div().id(`close-${c.id}`).text_color(t.dim).on_mouse_down("left", stop).on_click((_e, cx) => { cx.stop_propagation(); run("tab.close", { id: c.id }); }).child(svg("mods/pane/close.svg").size(12))));
     };
     const root = layout(), sidebar = find(root, "sidebar"), w = window();

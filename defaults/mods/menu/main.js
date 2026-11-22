@@ -21,7 +21,7 @@ async function checkout(folder, on) {
   return common.stdout.trim() === `${top.stdout.trim()}/.git` ? "main" : "linked";
 }
 
-// Pinned tabs come first in their space and show icon-only in the tab strip (shared "tabs.pinned": tab ids).
+// Pinned tabs come first in their space and show a pin icon with a compact label in the tab strip (shared "tabs.pinned": tab ids).
 function pin({ id, space }) {
   const was = shared("tabs.pinned") ?? [];
   const now = was.includes(id) ? was.filter((x) => x !== id) : [...was, id];
