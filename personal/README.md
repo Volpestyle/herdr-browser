@@ -66,7 +66,8 @@ browser commands before staging.
 The main app and every Chromium helper carry the macOS Bluetooth, passkey,
 camera and microphone usage declarations; packaging fails if any is missing.
 Compiles have a 30-minute limit; app tests run serially with a two-minute
-limit. A timeout stops only that updater-owned build process tree. This keeps
+limit; notice generation has a 15-minute limit (seconds interactively, minutes at
+the watcher's background priority on a busy Mac). A timeout stops only that updater-owned build process tree. This keeps
 an occasional filesystem-watcher test stall from hanging the watcher.
 Update checks use public release feeds; builds run locally.
 

@@ -46,9 +46,9 @@ FEATURE_PATHS = ['Cargo.toml', 'src/main.rs', 'src/window.rs', 'src/commands.rs'
 # personal Mac with proprietary codecs; nothing fetches, uploads or hosts it.
 # Each of his Macs archives that one framework itself, so each has its own digest.
 CEF_FRAMEWORK = 'Chromium Embedded Framework.framework'
-CEF_CODEC_VERSION = '156.0.28'
+CEF_CODEC_VERSION = '156.0.31'
 CEF_CODEC_SHA256 = (
-    '2f3bbdd402bfd8bc501cf133315659a27f1a9a76e9b31c280197660ce311ce73',  # personal Mac, where it was built
+    'eb739c2f812e4760354d772ed49df1157a37713abe5f1ecfb467533dec05b92d',  # personal Mac, where it was built
 )
 CEF_CODEC_ARCHIVE = Path.home() / 'cef-build' / f'cef-{CEF_CODEC_VERSION}-codecs-framework.tar.bz2'
 
@@ -412,8 +412,10 @@ def build_candidate(tag, state, *, force=False, engine=None):
                            output=child_log, timeout=120)
                 about = ROOT / '.local/tools/cargo-about/cargo-about'
                 if about.exists(): environment['CARGO_ABOUT'] = str(about)
+                # 13 s at normal priority; 177 s was measured at the watcher's background
+                # priority on a busy Mac, so 120 s failed every engine update it tried.
                 build_step(['bun', 'scripts/notices.ts'], cwd=tree, env=environment,
-                           output=child_log, timeout=120)
+                           output=child_log, timeout=900)
             candidate = build_root / 'Herdr Browser.app'
             codecs = package(ROOT / 'target/release/herdr-app', candidate, tag[1:], tree, patch_hash)
         state.update(status='staged', pending={'bundle': str(candidate), 'tag': tag,
