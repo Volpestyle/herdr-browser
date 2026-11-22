@@ -425,6 +425,8 @@ fn page_method(method: &str, params: &Value, own: Option<&str>) -> bool {
         "Network" => !name.starts_with("clear"),
         // Download behavior is the browser's, not this page's.
         "Page" => name != "setDownloadBehavior",
+        // Playwright 1.65 subscribes to its own page's crash and detach notices.
+        "Inspector" => matches!(name, "enable" | "disable"),
         "Target" => match name {
             "setAutoAttach" | "detachFromTarget" => true,
             "getTargetInfo" => params.get("targetId").is_none_or(|t| t.as_str().is_some_and(|t| Some(t) == own)),
@@ -1016,8 +1018,8 @@ mod tests {
 
     #[test]
     fn page_sessions_carry_playwrights_page_flow() {
-        // What Playwright 1.63 sent on page sessions in the real-app proof, plus
-        // the rest of the domains its page, frame and worker code uses.
+        // What Playwright 1.63 and 1.65 sent on page sessions in the real-app proofs,
+        // plus the rest of the domains its page, frame and worker code uses.
         let flow = [
             ("Page.enable", json!({})), ("Page.getFrameTree", json!({})), ("Log.enable", json!({})),
             ("Page.setLifecycleEventsEnabled", json!({"enabled": true})), ("Runtime.enable", json!({})),
@@ -1034,6 +1036,7 @@ mod tests {
             ("CSS.enable", json!({})), ("Overlay.highlightNode", json!({})), ("Debugger.enable", json!({})),
             ("Profiler.startPreciseCoverage", json!({})), ("IO.read", json!({"handle": "h"})),
             ("Target.getTargetInfo", json!({})), ("Target.getTargetInfo", json!({"targetId": "TA"})),
+            ("Inspector.enable", json!({})), ("Inspector.disable", json!({})),
         ];
         let mut r = attached_page();
         for (i, (method, params)) in flow.iter().enumerate() {
