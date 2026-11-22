@@ -66,13 +66,15 @@ jobs:
           key: browser-release-macos-arm64-${{ env.RUST_TOOLCHAIN }}-zig${{ env.ZIG_VERSION }}-${{ hashFiles('Cargo.lock') }}
           restore-keys: |
             browser-release-macos-arm64-${{ env.RUST_TOOLCHAIN }}-zig${{ env.ZIG_VERSION }}-
+          save-always: true
 
       - name: Install packaging tools
         run: |
           brew install create-dmg
           if ! command -v cargo-about >/dev/null 2>&1; then
-            cargo install --locked cargo-about --version "${{ env.CARGO_ABOUT_VERSION }}"
+            cargo install --locked cargo-about --version "${{ env.CARGO_ABOUT_VERSION }}" --features cli
           fi
+          cargo-about --version
 
       - name: Build release binaries
         run: |
