@@ -1202,7 +1202,10 @@ by someone else can be found again. A person pane's page stays out of the
 listing; read it with `browser.inspect` and `confirmed`.
 Responsive sites switch to their phone layout in a narrow split, which can drop
 button labels and move controls; open a wide web app with `place: "tab"` (from a
-script it is added unselected, so the person's view does not change).
+script it is added unselected, so the person's view does not change), or widen
+its split with `layout.resize {id: <pane>, weight}`. Weights are relative to the
+sibling panes (read them before changing a split the person arranged, and put
+them back); a tab nobody is viewing takes the new size when it is next shown.
 
 Use `profile: "agent"` for agent work: cookies and storage live separately under
 `chromium/Agent` in the app home. The default `person` profile retains existing
