@@ -369,6 +369,11 @@ def build_candidate(tag, state, *, force=False, engine=None):
     installed = state.get('installed', {})
     if not force and installed.get('tag') == tag and installed.get('patch') == patch_hash and installed.get('engine') == engine:
         return
+    # A validated candidate waits for the app to close; the watcher must not rebuild it every run.
+    pending = state.get('pending') or {}
+    if (not force and (pending.get('tag'), pending.get('patch'), pending.get('engine')) == (tag, patch_hash, engine)
+            and Path(pending.get('bundle', '')).is_dir()):
+        return
     if not force and state.get('failed_key') == key:
         print(f'{key} already failed; keeping the installed version (see status/log).')
         return

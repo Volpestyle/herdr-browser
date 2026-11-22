@@ -320,11 +320,11 @@ class BrowserBundleTests(unittest.TestCase):
         self.assertIn('WARNING: CEF 157.0.2 has no codec build', errors.getvalue())
         self.assertEqual(len(self.signed), 1)
 
-    def build_candidate(self, codecs):
+    def build_candidate(self, codecs, state=None):
         """The watcher's path: build output is redirected to a log, so the warning has to escape it."""
-        local = self.root / 'local'; local.mkdir()
+        local = self.root / 'local'; local.mkdir(exist_ok=True)
         (local / 'feature.patch').write_text('patch')
-        state, announced = {}, []
+        state, announced = {} if state is None else state, []
         fake = subprocess.CompletedProcess([], 0, stdout=b'/nonexistent\n')
         with patch.object(updater, 'LOCAL', local), patch.object(updater, 'run', return_value=fake), \
                 patch.object(updater, 'git', return_value='commit'), patch.object(updater, 'pin_engine'), \
@@ -341,6 +341,19 @@ class BrowserBundleTests(unittest.TestCase):
         self.assertEqual(updater.codec_warning(state), 'no H.264')
         state['installed'], state['pending'] = state['pending'], None
         self.assertEqual(updater.codec_warning(state), 'no H.264')
+
+    def test_a_staged_candidate_is_not_rebuilt_while_it_waits(self):
+        state, _ = self.build_candidate({'h264': True, 'cef': '157.0.2', 'sha256': 'pinned'})
+        staged = dict(state['pending'])
+        Path(staged['bundle']).mkdir(parents=True)
+        builds = lambda: sorted((self.root / 'local/builds').iterdir())
+        before = builds()
+        state, _ = self.build_candidate({'h264': False, 'cef': '157.0.2', 'warning': 'rebuilt'}, state)
+        self.assertEqual((state['pending'], builds()), (staged, before))
+        # A staged bundle that has gone missing is built again.
+        Path(staged['bundle']).rmdir()
+        state, _ = self.build_candidate({'h264': True, 'cef': '157.0.2', 'sha256': 'pinned'}, state)
+        self.assertEqual(len(builds()), len(before) + 1)
 
     def test_a_codec_build_is_not_announced(self):
         state, announced = self.build_candidate({'h264': True, 'cef': '156.0.15', 'sha256': 'pinned'})
