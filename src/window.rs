@@ -2922,8 +2922,13 @@ impl AppWindow {
 
     /// Whether a new space or tab is shown: `focus`, true when omitted; None when it isn't a boolean.
     fn focus(args: &Value) -> Option<bool> {
+        Self::focus_or(args, true)
+    }
+
+    /// Whether a new tab is shown: `focus`, `default` when omitted; None when it isn't a boolean.
+    fn focus_or(args: &Value, default: bool) -> Option<bool> {
         match args.get("focus") {
-            None | Some(Value::Null) => Some(true),
+            None | Some(Value::Null) => Some(default),
             Some(v) => v.as_bool(),
         }
     }
@@ -3074,10 +3079,13 @@ impl AppWindow {
                 if !person && matches!(place, Some("right" | "down")) && Self::arg(a, "pane").is_none() {
                     return self.fail("Pass the pane to split explicitly; focused panes are never implicit agent targets");
                 }
+                let Some(focus) = Self::focus_or(a, person) else {
+                    return self.fail(format!("{name} focus is true or false"));
+                };
                 let result = match place {
                     Some("right") => self.split_mod(Self::owned(a, "pane"), Axis::Row, crate::browser::MOD.into(), props),
                     Some("down") => self.split_mod(Self::owned(a, "pane"), Axis::Column, crate::browser::MOD.into(), props),
-                    Some("tab") | None => self.new_mod_tab(Self::owned(a, "space"), Self::arg(a, "name").unwrap_or(""), crate::browser::MOD.into(), props, true),
+                    Some("tab") | None => self.new_mod_tab(Self::owned(a, "space"), Self::arg(a, "name").unwrap_or(""), crate::browser::MOD.into(), props, focus),
                     _ => Err("place must be tab, right, or down (browser.split: right or down)".into()),
                 };
                 self.answer(result);
@@ -3090,6 +3098,9 @@ impl AppWindow {
                 if !person && matches!(place, Some("right" | "down")) && Self::arg(a, "pane").is_none() {
                     return self.fail("Pass the pane to split explicitly; focused panes are never implicit agent targets");
                 }
+                let Some(focus) = Self::focus_or(a, person) else {
+                    return self.fail("browser.markdown focus is true or false");
+                };
                 let preview = match crate::browser::markdown::open(raw_path) {
                     Ok(preview) => preview,
                     Err(error) => return self.fail(error),
@@ -3099,7 +3110,7 @@ impl AppWindow {
                 let result = match place {
                     Some("right") => self.split_mod(Self::owned(a, "pane"), Axis::Row, crate::browser::MOD.into(), props),
                     Some("down") => self.split_mod(Self::owned(a, "pane"), Axis::Column, crate::browser::MOD.into(), props),
-                    Some("tab") | None => self.new_mod_tab(Self::owned(a, "space"), tab_name, crate::browser::MOD.into(), props, true),
+                    Some("tab") | None => self.new_mod_tab(Self::owned(a, "space"), tab_name, crate::browser::MOD.into(), props, focus),
                     _ => Err("place must be tab, right, or down".into()),
                 };
                 self.answer(result);
@@ -4018,6 +4029,21 @@ impl AppWindow {
                 if name.starts_with("browser.") {
                     let caller = cmd["caller_terminal"].as_str().map(str::to_owned);
                     if !cmd["args"].is_object() { cmd["args"] = json!({}); }
+                    if matches!(name.as_str(), "browser.open" | "browser.markdown")
+                        && cmd["args"].get("space").is_none()
+                        && !matches!(cmd["args"].get("place").and_then(Value::as_str), Some("right" | "down"))
+                        && let Some(space) = caller
+                            .as_deref()
+                            .and_then(|c| {
+                                self.model
+                                    .pane_of(c)
+                                    .and_then(|p| self.model.space_of(&p))
+                                    .or_else(|| self.model.space_of(c))
+                            })
+                            .map(|s| s.id.clone())
+                    {
+                        cmd["args"]["space"] = space.into();
+                    }
                     if !matches!(name.as_str(), "browser.open" | "browser.split" | "browser.markdown") && cmd["args"].get("pane").is_none() {
                         let pane = caller.as_ref().and_then(|c| self.browser_openers.get(c));
                         let Some(pane) = pane else {

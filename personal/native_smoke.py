@@ -47,11 +47,16 @@ def main():
     binary = str(Path(args.binary).resolve())
     log = (work / 'app.log').open('w')
     app = subprocess.Popen([binary], env=env, stdout=log, stderr=subprocess.STDOUT)
-    def command(command_name, **kwargs):
-        result = subprocess.run([binary, 'do', command_name, json.dumps(kwargs)], env=env, text=True, capture_output=True, timeout=5)
+    def command(command_name, caller=None, **kwargs):
+        cmd_env = env if caller is None else {**env, 'HC_TERMINAL_ID': caller}
+        result = subprocess.run([binary, 'do', command_name, json.dumps(kwargs)], env=cmd_env, text=True, capture_output=True, timeout=5)
         value = json.loads(result.stdout)
         if result.returncode or value.get('error'): raise RuntimeError(f'{command_name}: {value}')
         return value
+    def listing():
+        result = subprocess.run([binary, 'ls'], env=env, text=True, capture_output=True, timeout=5)
+        if result.returncode: raise RuntimeError(f'ls: {result.stdout} {result.stderr}')
+        return json.loads(result.stdout)
     def until(test, description, timeout=30):
         deadline = time.monotonic() + timeout
         while time.monotonic() < deadline:
@@ -66,7 +71,32 @@ def main():
         until(lambda: subprocess.run([binary, 'status'], env=env, capture_output=True, timeout=5).returncode == 0, 'app control socket')
         shell = command('space.new', name='Browser smoke', folder=str(work), tab='Terminal')
         url = f'http://127.0.0.1:{server.server_port}'
-        browser = command('browser.open', profile='agent', url=url + '/one.html')
+        # Agent browser.open defaults to focus: false, appends at the end of the caller's space,
+        # and still loads hidden without stealing focus or inserting beside the active tab.
+        second = command('tab.new', name='Second', space=shell['space'])
+        command('tab.select', id=shell['tab'])
+        bg = command('browser.open', profile='agent', url=url + '/one.html')
+        bg_state = until(lambda: (x if (x := command('browser.inspect', pane=bg['pane'])).get('title') == 'one.html / JavaScript ready' and not x.get('loading') else None), 'background browser page')
+        assert not bg_state.get('native', {}).get('shown'), bg_state
+        ls1 = listing()
+        sp1 = next(s for s in ls1['spaces'] if s['id'] == shell['space'])
+        assert [t['id'] for t in sp1['tabs']] == [shell['tab'], second['tab'], bg['tab']], sp1
+        assert next(t['id'] for t in sp1['tabs'] if t['active']) == shell['tab'], sp1
+        # A caller terminal in another space routes its browser tab to that caller's space without switching spaces.
+        other = command('space.new', name='Other space', folder=str(work), tab='Other')
+        routed = command('browser.open', caller=shell['terminal'], profile='agent', url=url + '/two.html')
+        assert routed['space'] == shell['space'], routed
+        ls2 = listing()
+        assert next(s['id'] for s in ls2['spaces'] if s['active']) == other['space'], ls2
+        sp1_after = next(s for s in ls2['spaces'] if s['id'] == shell['space'])
+        assert [t['id'] for t in sp1_after['tabs']] == [shell['tab'], second['tab'], bg['tab'], routed['tab']], sp1_after
+        assert next(t['id'] for t in sp1_after['tabs'] if t['active']) == shell['tab'], sp1_after
+        command('pane.close', pane=routed['pane'])
+        command('pane.close', pane=bg['pane'])
+        command('tab.close', id=second['tab'])
+        command('space.close', id=other['space'], confirmed=True)
+        command('space.select', id=shell['space'])
+        browser = command('browser.open', profile='agent', url=url + '/one.html', focus=True)
         pane = browser['pane']
         subprocess.run([binary], env=env, timeout=5)
         def inspected():
@@ -123,7 +153,7 @@ def main():
         command('browser.wait', pane=md_pane, text='Live reload confirmed', timeout=10000)
         command('pane.close', pane=md_pane)
         report = {'ok': True, 'home': str(home), 'session': env['HC_SESSION'], 'browser': browser,
-                  'inspection': inspected(), 'user_agent': getattr(server, 'user_agent', None), 'checks': ['page load', 'JavaScript', 'back/forward', 'tab next/prev', 'split bounds', 'dialog hide/show', 'toast clip', 'native download', 'address focus', 'markdown viewer', 'markdown live reload']}
+                  'inspection': inspected(), 'user_agent': getattr(server, 'user_agent', None), 'checks': ['background append + caller space routing', 'page load', 'JavaScript', 'back/forward', 'tab next/prev', 'split bounds', 'dialog hide/show', 'toast clip', 'native download', 'address focus', 'markdown viewer', 'markdown live reload']}
         (work / 'result.json').write_text(json.dumps(report, indent=2) + '\n')
         print(json.dumps(report, indent=2), flush=True)
         if args.keep:
