@@ -196,7 +196,7 @@ home, core and display: `up`, `do`, `status`, `shot`, then `down` when done.
 Never stop a server or session you didn't start.
 
 
-## Native browser (personal Herdr Browser build, macOS)
+## Native browser (Herdr Browser, macOS)
 
 When `$HERDR_BROWSER` is set you are running inside Herdr Browser: always
 show web pages in its native browser, never the system browser, Chrome or a
@@ -245,6 +245,17 @@ Page commands return their result through `herdr-browser do`:
   page the owner authorized for this task, and never return secrets. Timeout is in
   milliseconds (default 5000, maximum 120000). Never call `alert`, `confirm` or
   `prompt`: a dialog blocks the page.
+  - **File inputs (`<input type="file">`)**: attach local non-secret files without
+    opening a native file picker by building a `DataTransfer` + `new File(...)` in
+    `browser.eval`, assigning `input.files = dt.files`, and dispatching `input` and
+    `change` events.
+  - **Downloads**: `http`/`https` and web-origin `blob:` downloads save under
+    `~/.config/herdr-app-browser/downloads/` on agent panes (person panes show the
+    save dialog).
+  - **Secret-bearing downloads or tokens**: never print a secret into `browser.eval`
+    stdout or chat. Wrap `herdr-browser do browser.eval` in a local script that reads
+    the subprocess stdout in memory and pipes it straight to a `0600` file or a
+    secret CLI (`gh secret set`, Keychain) without echoing a byte.
 - `browser.click {pane?, ref? | name, role?, nth?}`: click a snapshot element, or
   the one whose accessible name is exactly `name` (no snapshot needed). Without
   `role` only interactive roles match; `role`/`nth` (1-based) pick among several.

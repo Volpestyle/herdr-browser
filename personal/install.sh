@@ -126,6 +126,40 @@ fi
 
 /System/Library/Frameworks/CoreServices.framework/Frameworks/LaunchServices.framework/Support/lsregister -f "$app" 2>/dev/null || true
 
+# Install a lightweight loader skill so coding agents automatically discover
+# `herdr-browser --skill` without ever going stale across app updates.
+# Never overwrite a user-customized skill file.
+skill_dir="$HOME/.agents/skills/herdr-browser"
+skill_file="$skill_dir/SKILL.md"
+if [ ! -e "$skill_file" ] || { [ ! -L "$skill_file" ] && grep -q 'herdr-browser-managed-skill' "$skill_file" 2>/dev/null; }; then
+  mkdir -p "$skill_dir"
+  cat > "$skill_file" <<'EOF'
+---
+name: herdr-browser
+description: "Open, inspect, and drive native Chromium browser panes inside Herdr Browser (`herdr-browser do browser.*` and guarded Playwright `browser.cdp`). Use whenever `$HERDR_BROWSER` is set or the user asks to browse, preview, click, fill forms, upload files, or record pages in Herdr Browser."
+---
+<!-- herdr-browser-managed-skill -->
+
+# Herdr Browser
+
+Load the live manual from the installed binary each session:
+
+```sh
+herdr-browser --skill
+```
+
+Follow that output as this skill's instructions. Use `profile: "agent"` for
+autonomous browsing; pass `--confirmed true` on a `person` pane only when the
+user authorized that page for this task. Keep this loader small and do not save
+the manual's output over this file.
+EOF
+fi
+for root in "$HOME/.claude/skills" "$HOME/.codex/skills"; do
+  if [ -d "$root" ] && [ ! -e "$root/herdr-browser" ] && [ ! -L "$root/herdr-browser" ]; then
+    ln -s "$skill_dir" "$root/herdr-browser"
+  fi
+done
+
 # Install upstream herdr-core (hc) only if missing.
 if [ ! -e "$bin/herdr-core" ] && ! command -v herdr-core >/dev/null 2>&1; then
   curl -fsSL "$herdr_releases/core/install.sh" | HC_INSTALL_DIR="$bin" HERDR_RELEASES_URL="$herdr_releases" sh ||

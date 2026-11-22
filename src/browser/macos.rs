@@ -36,6 +36,12 @@ fn web_url(url: &str) -> bool {
     url == "about:blank"
         || url::Url::parse(url).is_ok_and(|u| matches!(u.scheme(), "http" | "https"))
 }
+fn download_url(url: &str) -> bool {
+    if let Some(inner) = url.strip_prefix("blob:") {
+        return url::Url::parse(inner).is_ok_and(|u| matches!(u.scheme(), "http" | "https"));
+    }
+    url != "about:blank" && web_url(url)
+}
 wrap_display_handler! {
     struct Display { tx: Tx }
     impl DisplayHandler {
@@ -208,7 +214,7 @@ wrap_download_handler! {
     struct Download { tx: Tx, ask: bool }
     impl DownloadHandler {
         fn can_download(&self, _browser: Option<&mut Browser>, url: Option<&CefString>, _method: Option<&CefString>) -> i32 {
-            url.is_some_and(|url| web_url(&url.to_string()) && url.to_string() != "about:blank") as i32
+            url.is_some_and(|url| download_url(&url.to_string())) as i32
         }
         fn on_before_download(&self, _browser: Option<&mut Browser>, _item: Option<&mut DownloadItem>, name: Option<&CefString>, callback: Option<&mut BeforeDownloadCallback>) -> i32 {
             let folder = crate::mods::app_dir().join("downloads");
@@ -752,7 +758,20 @@ impl Drop for Host {
 }
 #[cfg(test)]
 mod tests {
-    use super::shortcut;
+    use super::{download_url, shortcut};
+    #[test]
+    fn download_url_allows_web_and_web_origin_blob_urls_only() {
+        assert!(download_url("https://developer.apple.com/cert.cer"));
+        assert!(download_url("http://127.0.0.1:8080/report.csv"));
+        assert!(download_url("blob:https://appstoreconnect.apple.com/1234-5678"));
+        assert!(download_url("blob:http://localhost:3000/abcd"));
+        assert!(!download_url("about:blank"));
+        assert!(!download_url("file:///etc/passwd"));
+        assert!(!download_url("blob:file:///etc/passwd"));
+        assert!(!download_url("blob:null/1234"));
+        assert!(!download_url("javascript:alert(1)"));
+        assert!(!download_url("data:text/plain,hello"));
+    }
     #[test]
     fn shifted_brackets_always_switch_herdr_tabs() {
         assert_eq!(shortcut("[", true, false), Some("tab.prev"));

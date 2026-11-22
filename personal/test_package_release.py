@@ -233,6 +233,29 @@ class PublicInstallerTests(unittest.TestCase):
             self.assertEqual(recorded['argv'], ['do', 'browser.open', '--url', url])
             self.assertEqual(recorded['home'], str(fake_home / '.config/herdr-app-browser'))
 
+            skill = fake_home / '.agents/skills/herdr-browser/SKILL.md'
+            self.assertTrue(skill.is_file())
+            self.assertIn('herdr-browser --skill', skill.read_text())
+
+            # Re-running the installer must preserve user-customized skill files.
+            skill.write_text('# custom user skill\n')
+            with socketserver.TCPServer(('127.0.0.1', 0), QuietHandler) as server:
+                port = server.server_address[1]
+                thread = threading.Thread(target=server.serve_forever, daemon=True)
+                thread.start()
+                try:
+                    env = dict(
+                        os.environ,
+                        HOME=str(fake_home),
+                        HERDR_BROWSER_BASE_URL=f'http://127.0.0.1:{port}',
+                        HERDR_BROWSER_VERSION='browser-v0.1.12',
+                        PATH=f'{fake_bin}:{os.environ.get("PATH", "")}',
+                    )
+                    subprocess.run(['sh', str(PERSONAL / 'install.sh')], env=env, check=True, capture_output=True)
+                finally:
+                    server.shutdown()
+            self.assertEqual(skill.read_text(), '# custom user skill\n')
+
 
 if __name__ == '__main__':
     unittest.main()
