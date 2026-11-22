@@ -3115,7 +3115,7 @@ impl AppWindow {
                 };
                 self.answer(result);
             }
-            "browser.navigate" | "browser.back" | "browser.forward" | "browser.reload" | "browser.focus_url" | "browser.inspect" | "browser.devtools" | "browser.cdp" | "browser.snapshot" | "browser.read" | "browser.eval" | "browser.click" | "browser.type" | "browser.signin" | "browser.press" | "browser.scroll" | "browser.wait" | "browser.screenshot" | "browser.record" => {
+            "browser.navigate" | "browser.back" | "browser.forward" | "browser.reload" | "browser.focus_url" | "browser.inspect" | "browser.devtools" | "browser.cdp" | "browser.snapshot" | "browser.read" | "browser.eval" | "browser.download" | "browser.click" | "browser.type" | "browser.signin" | "browser.press" | "browser.scroll" | "browser.wait" | "browser.screenshot" | "browser.record" => {
                 let pane = Self::owned(a, "pane").or_else(|| person.then(|| self.model.focused_pane()).flatten());
                 let view = pane.as_ref().and_then(|p| self.copies.get(p)).and_then(|c| c.browser.clone());
                 let Some(view) = view else { return self.fail("Focus a native browser pane or pass its pane id"); };
@@ -4093,7 +4093,7 @@ impl AppWindow {
             return json!({ "ok": true });
         }
         if cmd.get("ls").is_some() {
-            return self.world();
+            return self.world(cx);
         }
         if cmd.get("status").is_some() {
             let round = |v: f32| (v as f64 * 100.0).round() / 100.0;
@@ -4123,9 +4123,9 @@ impl AppWindow {
         json!({ "error": "expected { do }, { ls }, { commands } or { status }" })
     }
 
-    /// Spaces, their tabs and terminals, for `herdr-app ls`. Sub-agents are listed
-    /// under the terminal that started them.
-    fn world(&self) -> Value {
+    /// Spaces, their tabs, terminals and native browsers, for `herdr-app ls`.
+    /// Sub-agents are listed under the terminal that started them.
+    fn world(&self, cx: &App) -> Value {
         let m = &self.model;
         let children = |addr: &str| -> Vec<String> {
             let mut out: Vec<String> = self
@@ -4156,7 +4156,8 @@ impl AppWindow {
                     .iter()
                     .map(|c| {
                         let terms: Vec<Value> = c.root.terminals().iter().filter_map(|n| Some(terminal(&n.id, n.terminal()?))).collect();
-                        json!({ "id": c.id, "name": Model::tab_name(p, c), "active": Some(&c.id) == active.as_ref(), "settled": c.settled.is_some(), "terminals": terms })
+                        let browsers: Vec<Value> = c.root.panes().iter().filter_map(|n| Some(self.copies.get(&n.id)?.browser.as_ref()?.read(cx).listing())).collect();
+                        json!({ "id": c.id, "name": Model::tab_name(p, c), "active": Some(&c.id) == active.as_ref(), "settled": c.settled.is_some(), "terminals": terms, "browsers": browsers })
                     })
                     .collect();
                 json!({ "id": p.id, "name": m.space_name(p, &home()), "folder": p.folder, "machine": p.machine, "active": m.active.as_deref() == Some(&p.id), "tabs": tabs })

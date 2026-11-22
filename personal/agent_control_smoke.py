@@ -27,6 +27,8 @@ PAGE = b'''<!doctype html><title>Agent control fixture</title>
 <label>Secret <input type="password" id="secret" autocomplete="off"></label><button>Submit</button></form>
 <p id="result">Waiting for input</p><p id="key"></p><p id="scroll"></p><p id="cookie"></p><script>document.querySelector('#cookie').textContent='Cookie: '+document.cookie;document.addEventListener('keydown',e=>{if(e.key==='Tab')document.querySelector('#key').textContent='Tab received'});window.addEventListener('scroll',()=>{if(scrollY>0)document.querySelector('#scroll').textContent='Scroll received'})</script><p><a href="/next">Next page</a></p></main>
 <div style="height:1500px"></div><p>Bottom of fixture</p>'''
+# Every byte value, so a download proves the base64 round trip is exact.
+ASSET = bytes(range(256)) * 40
 
 
 def asn(value):
@@ -55,9 +57,17 @@ def main():
     class Handler(BaseHTTPRequestHandler):
         def log_message(self, *_): pass
         def do_GET(self):
+            if self.path == '/missing':
+                self.send_response(404)
+                self.send_header('Content-Length', '0')
+                self.end_headers()
+                return
             body = PAGE if self.path != '/next' else b'<!doctype html><title>Next fixture</title><h1>Navigation complete</h1>'
+            if self.path.startswith('/files/asset.bin'): body = ASSET
             self.send_response(200)
-            self.send_header('Content-Type', 'text/html')
+            self.send_header('Content-Type', 'application/octet-stream' if body is ASSET else 'text/html')
+            # Like a public CDN: any origin may read it, which refuses reads that carry cookies.
+            if self.path == '/files/asset.bin?public': self.send_header('Access-Control-Allow-Origin', '*')
             if self.path.startswith('/?set=agent'): self.send_header('Set-Cookie', 'profile_marker=agent-only; Path=/; SameSite=Lax')
             self.send_header('Content-Length', str(len(body)))
             self.end_headers()
@@ -204,6 +214,28 @@ def main():
         command('browser.eval', js="'x'.repeat(300000)", expect_error='Result exceeds')
         command('browser.eval', expect_error='needs js')
         assert command('browser.eval', js='1 + 1')['result'] == 2, 'the page must survive a stopped script'
+        # Each call has its own scope: names neither clash across calls nor leak into the page.
+        assert command('browser.eval', js='const reused = 1; reused')['result'] == 1
+        assert command('browser.eval', js='let reused = 2; reused')['result'] == 2
+        assert command('browser.eval', js='typeof reused')['result'] == 'undefined'
+        assert command('browser.eval', js='window.kept = 3; 0')['result'] == 0 and command('browser.eval', js='kept')['result'] == 3
+        assert command('browser.eval', js='const v = await Promise.resolve(5); v * 2 // trailing comment')['result'] == 10
+        command('browser.snapshot', scope='form#absent', expect_error='No element matches scope')
+        # Downloads: fetched by the page, saved under the app home, never overwritten.
+        saved = command('browser.download', url='files/asset.bin')
+        first = Path(saved['path'])
+        assert first.parent == home / 'downloads' and first.name == 'asset.bin' and first.read_bytes() == ASSET, saved
+        assert saved['bytes'] == len(ASSET) and saved['status'] == 200 and saved['url'].endswith('/files/asset.bin'), saved
+        again = Path(command('browser.download', url=url + 'files/asset.bin')['path'])
+        assert again != first and again.read_bytes() == ASSET and first.read_bytes() == ASSET
+        dot = command('browser.download', url='data:image/gif;base64,R0lGODlhAQABAAAAACw=')
+        assert Path(dot['path']).name.startswith('download') and dot['path'].endswith('.gif') and dot['url'] is None, dot
+        command('browser.download', url='missing', expect_error='HTTP 404')
+        # Another origin that sends no CORS header stays unreadable to this page.
+        command('browser.download', url=f'http://localhost:{server.server_port}/files/asset.bin', expect_error='could not fetch')
+        public = command('browser.download', url=f'http://localhost:{server.server_port}/files/asset.bin?public')
+        assert Path(public['path']).read_bytes() == ASSET, public
+        command('browser.download', expect_error='needs url')
         command('browser.wait', settled=True)
         snap = command('browser.snapshot')
         assert 'InlineTextBox' not in snap['tree'] and 'link "Next page" -> /next' in snap['tree'], snap['tree']
@@ -235,6 +267,11 @@ def main():
         person = command('browser.open', profile='person', url=url, caller='qa-terminal-b')
         command('browser.read', pane=person['pane'], expect_error='person-profile')
         command('browser.eval', pane=person['pane'], js='document.title', expect_error='person-profile')
+        command('browser.download', pane=person['pane'], url='files/asset.bin', expect_error='person-profile')
+        # ls finds both browsers again, but shows only the agent page's address.
+        listed = {b['pane']: b for s in json.loads(subprocess.run([binary, 'ls'], env=env, text=True, capture_output=True).stdout)['spaces'] for tab in s['tabs'] for b in tab['browsers']}
+        assert listed[pane]['profile'] == 'agent' and listed[pane]['url'].startswith(url) and listed[pane]['title'] == 'Agent control fixture', listed
+        assert listed[person['pane']] == {'pane': person['pane'], 'profile': 'person'}, listed
         command('browser.navigate', pane=person['pane'], url=url, expect_error='person-profile')
         # Explicit agent target continues to work even while person pane is selected.
         assert command('browser.read')['pane'] == pane

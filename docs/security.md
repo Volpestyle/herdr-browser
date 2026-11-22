@@ -29,7 +29,7 @@ Remote connections use SSH through the core.
 
 ## Native browser panes (personal fork, macOS)
 
-The `browser.snapshot`, `browser.read`, `browser.eval`, `browser.click`, `browser.type`,
+The `browser.snapshot`, `browser.read`, `browser.eval`, `browser.download`, `browser.click`, `browser.type`,
 `browser.press`, `browser.scroll`, `browser.wait` and `browser.screenshot`
 commands use that same local socket trust line. They reach only the named
 pane's CEF browser through its in-process DevTools message observer. No network
@@ -47,6 +47,17 @@ on a person pane is `confirmed: true`, the same mistake guard as the other
 commands and no stronger; results come back over the control socket and so
 carry its trust line. Website JavaScript still receives no bridge to Herdr:
 the result leaves through DevTools, not through anything the page can call.
+Each call is wrapped in its own block, so the names it declares do not stay in
+the page's global scope.
+
+`browser.download` has the same reach for one URL: the page fetches it with its
+cookies and sign-in, from Herdr's isolated world (page scripts cannot wrap that
+`fetch`), under the page's own CORS rules (a site that lets any origin read it
+is asked again without cookies), and Herdr writes the bytes under the
+app home's `downloads/` with a sanitized name that cannot leave that folder and
+never overwrites. It is gated like `browser.eval`. `herdr-app ls` lists browser
+panes, but only an agent pane's URL and title; a person pane's page is read with
+`browser.inspect` and `confirmed`.
 
 `browser.cdp` gives Playwright raw CDP over a bridge, not Chromium's debugging
 port: Herdr reserves fds 3/4 at startup, launches Chromium with

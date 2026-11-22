@@ -867,6 +867,10 @@ impl Control {
                             ex,
                         )
                         .await?;
+                    // No match is node 0, which describeNode would report as a missing id.
+                    if found["nodeId"].as_i64().unwrap_or(0) == 0 {
+                        return Err(format!("No element matches scope {scope:?}"));
+                    }
                     let node = self
                         .call("DOM.describeNode", json!({"nodeId":found["nodeId"]}), ex)
                         .await?;
@@ -970,6 +974,12 @@ impl Control {
                     Value::Null => return Err("js is required: the JavaScript to evaluate".into()),
                     other => format!("({other})"),
                 };
+                // Each call gets its own block: its let/const/class names neither leak into the
+                // page's global scope (a person's real page, shared with other agents) nor clash
+                // with an earlier call's (REPL mode refuses a const where a let was, and back).
+                // A block still yields its last expression's value; `{` shares line 1 so error
+                // line numbers stay the caller's.
+                let js = format!("{{{js}\n}}");
                 let timeout = match args.get("timeout") {
                     None => 5000,
                     Some(v) => v
@@ -1016,6 +1026,87 @@ impl Control {
                 }
                 let page = self.version(ex).await.ok();
                 Ok(json!({"result":out,"type":result["type"],"url":page.as_ref().map(|p| p["page"]["url"].clone())}))
+            }
+            "browser.download" => {
+                let url = args["url"]
+                    .as_str()
+                    .filter(|u| !u.is_empty())
+                    .ok_or("url is required: what to save")?;
+                let timeout = match args.get("timeout") {
+                    None => 30000,
+                    Some(v) => v
+                        .as_u64()
+                        .filter(|v| (1..=120000).contains(v))
+                        .ok_or("timeout must be 1..120000 milliseconds")?,
+                };
+                // The page fetches it, from Herdr's isolated world: the page's cookies and
+                // sign-in, its CORS rules, relative and blob: URLs, and no page script can wrap
+                // fetch there. The bytes cross DevTools as base64, as a screenshot's do.
+                let context = self.context(ex).await?;
+                let expression = format!("{DOWNLOAD}({}, {DOWNLOAD_BYTES})", Value::String(url.into()));
+                let started = Instant::now();
+                let value = self
+                    .call_within(
+                        "Runtime.evaluate",
+                        json!({"expression":expression,"contextId":context,"awaitPromise":true,"returnByValue":true}),
+                        Duration::from_millis(timeout),
+                        ex,
+                    )
+                    .await
+                    .map_err(|e| {
+                        if started.elapsed() >= Duration::from_millis(timeout) {
+                            format!("Download did not finish within {timeout} ms")
+                        } else {
+                            e
+                        }
+                    })?;
+                if let Some(thrown) = value.get("exceptionDetails") {
+                    let detail = thrown["exception"]["description"]
+                        .as_str()
+                        .or(thrown["text"].as_str())
+                        .unwrap_or("unknown error");
+                    let detail = detail.lines().next().unwrap_or(detail);
+                    return Err(format!("The page could not fetch {url}: {detail}. A network error, or another site that does not let this page read it (CORS): open that URL in its own pane and download it there"));
+                }
+                let got = &value["result"]["value"];
+                let status = got["status"].as_u64().unwrap_or(0);
+                if got["ok"] != true {
+                    return Err(format!("HTTP {status} for {url}; nothing saved"));
+                }
+                let size = got["bytes"].as_u64().unwrap_or(0);
+                let encoded = got["data"].as_str().ok_or_else(|| {
+                    format!("{url} is {size} bytes, over the {} MB download limit", DOWNLOAD_BYTES / 1024 / 1024)
+                })?;
+                let bytes = base64::engine::general_purpose::STANDARD
+                    .decode(encoded)
+                    .map_err(|e| e.to_string())?;
+                let kind = got["type"].as_str().unwrap_or("");
+                let name = download_name(got["url"].as_str().unwrap_or(url), kind);
+                let dir = crate::mods::app_dir().join("downloads");
+                std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
+                use std::io::Write;
+                let open = |path: &std::path::Path| {
+                    std::fs::OpenOptions::new().write(true).create_new(true).open(path)
+                };
+                // Keep the site's name when it is free; never overwrite an earlier download.
+                let mut path = dir.join(&name);
+                let mut file = match open(&path) {
+                    Ok(file) => file,
+                    Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => {
+                        let stamp = std::time::SystemTime::now()
+                            .duration_since(std::time::UNIX_EPOCH)
+                            .map_err(|e| e.to_string())?
+                            .as_nanos();
+                        path = dir.join(match name.rsplit_once('.') {
+                            Some((stem, ext)) => format!("{stem}-{stamp}.{ext}"),
+                            None => format!("{name}-{stamp}"),
+                        });
+                        open(&path).map_err(|e| e.to_string())?
+                    }
+                    Err(e) => return Err(e.to_string()),
+                };
+                file.write_all(&bytes).map_err(|e| e.to_string())?;
+                Ok(json!({"path":path,"bytes":bytes.len(),"content_type":kind,"status":status,"url":got["url"]}))
             }
             "browser.read" => {
                 let format = args["format"].as_str().unwrap_or("text");
@@ -1289,6 +1380,79 @@ fn scroll_report(before: &Value, after: &Value, dx: f64, dy: f64) -> Value {
 /// Largest browser.eval result, as JSON text.
 const EVAL_RESULT: usize = 200_000;
 
+/// Largest browser.download, in bytes; it crosses DevTools as base64, like a screenshot.
+const DOWNLOAD_BYTES: u64 = 32 * 1024 * 1024;
+
+/// Called with the URL and the byte limit; an HTTP error or an oversized body comes back
+/// without its bytes. Only an http(s) final URL is returned: a data: URL is the content.
+const DOWNLOAD: &str = r#"(async (url, max) => {
+  const target = new URL(url, location.href);
+  let response;
+  try {
+    response = await fetch(target, {credentials: 'include'});
+  } catch (error) {
+    // A site that lets any origin read it (`*`) refuses a read that carries cookies;
+    // ask such a site again without them. A same-origin failure is a real one.
+    if (target.origin === location.origin) throw error;
+    response = await fetch(target, {credentials: 'same-origin'});
+  }
+  const out = {ok: response.ok, status: response.status, url: /^https?:/.test(response.url) ? response.url : null};
+  if (!response.ok) return out;
+  const blob = await response.blob();
+  out.type = blob.type || response.headers.get('content-type') || '';
+  out.bytes = blob.size;
+  if (blob.size > max) return out;
+  const bytes = new Uint8Array(await blob.arrayBuffer());
+  let binary = '';
+  for (let i = 0; i < bytes.length; i += 0x8000) binary += String.fromCharCode.apply(null, bytes.subarray(i, i + 0x8000));
+  out.data = btoa(binary);
+  return out;
+})"#;
+
+/// A safe file name for a download: the URL's last path segment, else `download`, with an
+/// extension from the content type when the name has none.
+fn download_name(url: &str, content_type: &str) -> String {
+    let segment = url::Url::parse(url)
+        .ok()
+        .filter(|u| matches!(u.scheme(), "http" | "https"))
+        .and_then(|u| u.path_segments()?.filter(|s| !s.is_empty()).last().map(str::to_string))
+        .unwrap_or_default();
+    let mut name: String = segment
+        .chars()
+        .map(|c| if c.is_ascii_alphanumeric() || matches!(c, '.' | '-' | '_') { c } else { '_' })
+        .take(120)
+        .collect();
+    name = name.trim_matches('.').to_string();
+    if name.is_empty() {
+        name = "download".into();
+    }
+    if !name.contains('.') {
+        let mime = content_type.split(';').next().unwrap_or("").trim();
+        let ext = match mime {
+            "image/png" => "png",
+            "image/jpeg" => "jpg",
+            "image/webp" => "webp",
+            "image/gif" => "gif",
+            "image/avif" => "avif",
+            "image/svg+xml" => "svg",
+            "video/mp4" => "mp4",
+            "video/webm" => "webm",
+            "audio/mpeg" => "mp3",
+            "application/pdf" => "pdf",
+            "application/json" => "json",
+            "application/zip" => "zip",
+            "text/html" => "html",
+            "text/csv" => "csv",
+            "text/plain" => "txt",
+            _ => "",
+        };
+        if !ext.is_empty() {
+            name = format!("{name}.{ext}");
+        }
+    }
+    name
+}
+
 /// Tallest full-page capture, in CSS pixels; a longer page is cut there and says so.
 const FULL_HEIGHT: f64 = 20000.;
 
@@ -1427,4 +1591,20 @@ fn env_login(file: &str, user_key: &str, password_key: &str, site: &str) -> Resu
         password: value(password_key)?,
         urls: vec![site.trim().to_ascii_lowercase()],
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::download_name;
+
+    #[test]
+    fn download_names_keep_the_site_name_and_stay_inside_the_folder() {
+        assert_eq!(download_name("https://cdn.example.com/a/0_1_640_N.webp?method=shortest", "image/webp"), "0_1_640_N.webp");
+        assert_eq!(download_name("https://example.com/files/report", "application/pdf; charset=binary"), "report.pdf");
+        assert_eq!(download_name("https://example.com/../..%2Fetc%2Fpasswd", "text/plain"), "_2Fetc_2Fpasswd.txt");
+        assert_eq!(download_name("https://example.com/", "image/png"), "download.png");
+        assert_eq!(download_name("data:image/png;base64,iVBOR", "image/png"), "download.png");
+        assert_eq!(download_name("blob:https://example.com/1f2e", ""), "download");
+        assert_eq!(download_name("/relative/thing.zip", ""), "download");
+    }
 }

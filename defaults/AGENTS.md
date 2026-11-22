@@ -698,7 +698,7 @@ From a shell:
 ```sh
 herdr-app do tab.new --name "fix login" --argv '["claude"]' --task "look at the login bug"
 herdr-app do pane.split:right
-herdr-app ls          # spaces, their tabs and terminals (sub-agents under their parent)
+herdr-app ls          # spaces, their tabs, terminals (sub-agents under their parent) and browsers
 herdr-app status      # what's on screen: layout, focus, overlays, zoom, errors from files and mods
 herdr-app commands    # every command and its arguments
 ```
@@ -1196,6 +1196,13 @@ and `browser.inspect {pane?}` address an explicit pane. From a terminal, omittin
 never the focused pane. With no caller mapping, pass `pane` explicitly. Mappings
 last until the app closes; a closed target is an error, never a focus fallback.
 The + menu and keyboard shortcuts still target the person's focused browser.
+`herdr-browser ls` lists each tab's browser panes under `browsers`: `pane` and
+`profile`, plus `url` and `title` for agent panes, so a pane opened earlier or
+by someone else can be found again. A person pane's page stays out of the
+listing; read it with `browser.inspect` and `confirmed`.
+Responsive sites switch to their phone layout in a narrow split, which can drop
+button labels and move controls; open a wide web app with `place: "tab"` (from a
+script it is added unselected, so the person's view does not change).
 
 Use `profile: "agent"` for agent work: cookies and storage live separately under
 `chromium/Agent` in the app home. The default `person` profile retains existing
@@ -1209,7 +1216,8 @@ Page commands return their result through `herdr-browser do`:
   tree as compact `e12 button "Sign in"` lines, URL, title and generation. Links and
   images end with where they point, `e7 link "" -> /explore` (site-relative on the
   page's own origin), so unlabeled icons and lists of links can be told apart.
-  Optional `scope` is a CSS selector; `filter: "interactive"` keeps only controls.
+  Optional `scope` is a CSS selector (one that matches nothing is an error);
+  `filter: "interactive"` keeps only controls.
   At most 1000 nodes, with names capped to 300 characters; `capped` says if cut.
 - `browser.read {pane?, format?: "text" | "markdown"}`: rendered visible text,
   URL and title, capped to 20000 characters. Markdown is escaped plain text.
@@ -1220,7 +1228,9 @@ Page commands return their result through `herdr-browser do`:
   several. It reads and does whatever the page can, including field values and
   storage, with the page's sign-in: on a person pane pass `confirmed` only for a
   page the owner authorized for this task, and never return secrets. Timeout is in
-  milliseconds (default 5000, maximum 120000). Never call `alert`, `confirm` or
+  milliseconds (default 5000, maximum 120000). Each call runs in its own block, so
+  its `const`/`let` names neither persist nor clash with an earlier call's; assign
+  `window.name = …` to keep a value. Never call `alert`, `confirm` or
   `prompt`: a dialog blocks the page.
   - **File inputs (`<input type="file">`)**: attach local non-secret files without
     opening a native file picker by building a `DataTransfer` + `new File(...)` in
@@ -1228,11 +1238,21 @@ Page commands return their result through `herdr-browser do`:
     `change` events.
   - **Downloads**: `http`/`https` and web-origin `blob:` downloads save under
     `~/.config/herdr-app-browser/downloads/` on agent panes (person panes show the
-    save dialog).
+    save dialog; save a known URL there with `browser.download`).
   - **Secret-bearing downloads or tokens**: never print a secret into `browser.eval`
     stdout or chat. Wrap `herdr-browser do browser.eval` in a local script that reads
     the subprocess stdout in memory and pipes it straight to a `0600` file or a
     secret CLI (`gh secret set`, Keychain) without echoing a byte.
+- `browser.download {pane?, url, timeout?}`: save a file with the page's own
+  sign-in. The page fetches `url` (relative, `data:` and `blob:` URLs too; another
+  site only if it lets this page read it, CORS, and without cookies when that site
+  lets any origin read it, as public CDNs do) and the bytes land under the app
+  home's `downloads/`, keeping the site's file name and never overwriting. Replies
+  `path`, `bytes`, `content_type` and `status`; an HTTP error saves nothing. Up to
+  32 MB; timeout in milliseconds (default 30000, maximum 120000). Use it for
+  images a CDN serves only to the signed-in site (`curl` gets 403) rather than
+  base64 through `browser.eval`. Like `browser.eval` it acts with the page's
+  sign-in, so a person pane needs `confirmed`.
 - `browser.click {pane?, ref? | name, role?, nth?}`: click a snapshot element, or
   the one whose accessible name is exactly `name` (no snapshot needed). Without
   `role` only interactive roles match; `role`/`nth` (1-based) pick among several.
@@ -1298,6 +1318,7 @@ herdr-browser do browser.type --name Email --text me@example.com
 herdr-browser do browser.signin --item "My Site"
 herdr-browser do browser.read --format markdown
 herdr-browser do browser.eval --js '[...document.links].map(a => a.href)'
+herdr-browser do browser.download --url "$(herdr-browser do browser.eval --js 'document.images[0].src' | jq -r .result)"
 herdr-browser do browser.scroll --dy 800
 herdr-browser do browser.wait --settled true
 herdr-browser do browser.screenshot --scale 0.5

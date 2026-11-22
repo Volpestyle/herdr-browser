@@ -24,6 +24,7 @@ pub fn is_page_command(name: &str) -> bool {
             | "browser.cdp"
             | "browser.read"
             | "browser.eval"
+            | "browser.download"
             | "browser.click"
             | "browser.type"
             | "browser.signin"
@@ -475,6 +476,16 @@ impl Browser {
             out["native"] = host.inspect();
         }
         out
+    }
+
+    /// How `herdr-app ls` lists this pane. A person pane's page stays out of the listing:
+    /// reading it is `browser.inspect` with `confirmed`, like every other read.
+    pub fn listing(&self) -> Value {
+        if self.profile == "agent" {
+            json!({"pane":self.pane, "profile":self.profile, "url":self.url, "title":self.title})
+        } else {
+            json!({"pane":self.pane, "profile":self.profile})
+        }
     }
 
     pub fn check_access(&self, args: &Value) -> Result<(), String> {
