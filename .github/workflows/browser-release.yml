@@ -60,6 +60,7 @@ jobs:
             ~/.cargo/registry/index
             ~/.cargo/registry/cache
             ~/.cargo/git/db
+            ~/.cargo/bin/cargo-about
             ~/.local/share/herdr-browser/cef
             target
           key: browser-release-macos-arm64-${{ env.RUST_TOOLCHAIN }}-zig${{ env.ZIG_VERSION }}-${{ hashFiles('Cargo.lock') }}
@@ -76,21 +77,19 @@ jobs:
       - name: Build release binaries
         run: |
           mkdir -p "$HOME/.local/share/herdr-browser/cef"
+          echo "CEF_PATH=$HOME/.local/share/herdr-browser/cef" >> "$GITHUB_ENV"
           export CEF_PATH="$HOME/.local/share/herdr-browser/cef"
           cargo build --release --bins
 
       - name: Run unit tests and refresh notices
-        env:
-          CEF_PATH: ${{ env.HOME }}/.local/share/herdr-browser/cef
         run: |
           python3 -m unittest discover -s personal -p 'test_*.py'
           sh -n personal/install.sh
-          cargo test --locked --bin herdr-app -- --test-threads=1
+          cargo test --release --locked --bin herdr-app -- --test-threads=1
           bun scripts/notices.ts
 
       - name: Package, sign, and notarize stock-CEF release
         env:
-          CEF_PATH: ${{ env.HOME }}/.local/share/herdr-browser/cef
           APPLE_CERTIFICATE_P12: ${{ secrets.APPLE_CERTIFICATE_P12 }}
           APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
           APPLE_API_KEY: ${{ secrets.APPLE_API_KEY }}
