@@ -105,7 +105,18 @@ const SCROLLERS: &str = r#"(() => {
   if (page && !chain.includes(page)) chain.push(page);
   const same = !frame && chain[0] === globalThis.herdrScrollers?.[0];
   globalThis.herdrScrollers = chain;
-  return {at, frame, same, state: herdrScrollState()};
+  return {at, frame, same, hidden: document.hidden, state: herdrScrollState()};
+})()"#;
+/// A page that is not on screen is not rendered, so Chromium never applies a wheel
+/// there. Scroll the innermost scroller that can still move, as a wheel would chain.
+const SCRIPT_SCROLL: &str = r#"(() => {
+  const [left, top] = __DELTA__;
+  for (const e of globalThis.herdrScrollers || []) {
+    const x = e.scrollLeft, y = e.scrollTop;
+    e.scrollBy({left, top, behavior: 'instant'});
+    if (e.scrollLeft !== x || e.scrollTop !== y) break;
+  }
+  return herdrScrollState();
 })()"#;
 const SCROLL_STATE: &str = r#"globalThis.herdrScrollState = () => (globalThis.herdrScrollers || []).map(e =>
   [e.scrollLeft, e.scrollTop, Math.max(0, e.scrollWidth - e.clientWidth), Math.max(0, e.scrollHeight - e.clientHeight)]);"#;
@@ -548,7 +559,7 @@ impl Control {
 
     /// Wheels at `point` (default: the middle of the viewport, which is over the
     /// content on pages with fixed chrome at the edges) and reports what moved.
-    async fn wheel(&self, point: Option<(f64, f64)>, dx: f64, dy: f64, ex: &BackgroundExecutor) -> Result<Value, String> {
+    async fn wheel(&self, point: Option<(f64, f64)>, dx: f64, dy: f64, via: Option<&str>, ex: &BackgroundExecutor) -> Result<Value, String> {
         let point = point.map_or(Value::Null, |(x, y)| json!([x, y]));
         let script = format!("{SCROLL_STATE}\n{}", SCROLLERS.replace("__POINT__", &point.to_string()));
         let before = self.evaluate(&script, ex).await?;
@@ -556,23 +567,46 @@ impl Control {
             before["at"][0].as_f64().ok_or("Page has no viewport")?,
             before["at"][1].as_f64().ok_or("Page has no viewport")?,
         );
+        // Unasked, a page Chromium is not rendering gets the script: a wheel would stall there.
+        let script = via.map_or(before["hidden"] == true, |via| via == "script");
+        if script && before["frame"] != true {
+            let source = SCRIPT_SCROLL.replace("__DELTA__", &json!([dx, dy]).to_string());
+            let after = self.evaluate(&source, ex).await?;
+            let mut report = scroll_report(&before["state"], &after, dx, dy);
+            report["via"] = "script".into();
+            return Ok(report);
+        }
         if before["same"] != true {
             if let Some(left) = self.wheeled.get().and_then(|at| WHEEL_LATCH.checked_sub(at.elapsed())) {
                 ex.timer(left).await;
             }
         }
-        self.call(
-            "Input.dispatchMouseEvent",
-            json!({"type":"mouseWheel","x":x,"y":y,"deltaX":dx,"deltaY":dy}),
-            ex,
-        )
-        .await?;
+        // A busy page can acknowledge late; what happened is measured below either way.
+        match self
+            .call(
+                "Input.dispatchMouseEvent",
+                json!({"type":"mouseWheel","x":x,"y":y,"deltaX":dx,"deltaY":dy}),
+                ex,
+            )
+            .await
+        {
+            Err(error) if !error.contains("timed out") => return Err(error),
+            _ => {}
+        }
         self.wheeled.set(Some(Instant::now()));
         if before["frame"] == true {
             // The wheel went into another document; its offsets are not ours to read.
             return Ok(json!({"ok":true,"measured":false}));
         }
-        // Chromium applies the wheel over the next frames; read until it rests.
+        // Chromium applies the wheel over the next frames; read until it rests. With
+        // room to move that way, give a slow page longer before calling it unmoved.
+        let room = before["state"].as_array().is_some_and(|scrollers| {
+            scrollers.iter().any(|s| {
+                let (left, top, max_left, max_top) = (number(s, 0), number(s, 1), number(s, 2), number(s, 3));
+                dy > 0. && top < max_top - 1. || dy < 0. && top > 0. || dx > 0. && left < max_left - 1. || dx < 0. && left > 0.
+            })
+        });
+        let idle = Duration::from_millis(if room { 1500 } else { 300 });
         let mut after = before["state"].clone();
         let started = Instant::now();
         loop {
@@ -581,35 +615,15 @@ impl Control {
                 return Ok(json!({"ok":true,"measured":false}));
             };
             let waited = started.elapsed();
-            let rested = now == after && (now != before["state"] || waited >= Duration::from_millis(300));
+            let rested = now == after && (now != before["state"] || waited >= idle);
             after = now;
-            if rested || waited >= Duration::from_millis(1500) {
+            if rested || waited >= Duration::from_millis(3000) {
                 break;
             }
         }
-        let number = |v: &Value, i: usize| v[i].as_f64().unwrap_or(0.);
-        let (was, is) = (before["state"].as_array(), after.as_array());
-        let pairs: Vec<(&Value, &Value)> = match (was, is) {
-            (Some(was), Some(is)) if was.len() == is.len() => was.iter().zip(is).collect(),
-            _ => return Ok(json!({"ok":true,"measured":false})),
-        };
-        // Report the scroller that moved; when none did, the innermost one under the point.
-        let Some((was, is)) = pairs.iter().find(|(was, is)| was != is).or(pairs.first()) else {
-            return Ok(json!({"ok":true,"moved":false,"dx":0,"dy":0}));
-        };
-        let (moved_x, moved_y) = (number(is, 0) - number(was, 0), number(is, 1) - number(was, 1));
-        // Offsets are fractional while the limits are whole pixels: allow one pixel.
-        let stopped = |asked: f64, at: f64, max: f64| {
-            if asked > 0. { at >= max - 1. } else { asked == 0. || at <= 0. }
-        };
-        Ok(json!({
-            "ok": true,
-            "moved": moved_x != 0. || moved_y != 0.,
-            "dx": moved_x, "dy": moved_y,
-            "left": number(is, 0), "top": number(is, 1),
-            "max_left": number(is, 2), "max_top": number(is, 3),
-            "at_end": stopped(dx, number(is, 0), number(is, 2)) && stopped(dy, number(is, 1), number(is, 3)),
-        }))
+        let mut report = scroll_report(&before["state"], &after, dx, dy);
+        report["via"] = "wheel".into();
+        Ok(report)
     }
 
     async fn record_start(&self, ex: &BackgroundExecutor) -> Result<Value, String> {
@@ -1097,6 +1111,12 @@ impl Control {
                 };
                 let (dx, dy) = (delta("dx")?, delta("dy")?);
                 let wheel = args.get("dx").is_some() || args.get("dy").is_some();
+                let via = match args.get("via").map(Value::as_str) {
+                    None => None,
+                    Some(Some(via @ ("wheel" | "script"))) if wheel => Some(via),
+                    Some(Some("wheel" | "script")) => return Err("via applies to a dy/dx scroll".into()),
+                    _ => return Err("via must be wheel or script".into()),
+                };
                 if !element && !wheel {
                     return Err("Pass ref or name to bring an element into view, dy/dx to wheel the page, or both to wheel over that element".into());
                 }
@@ -1115,7 +1135,7 @@ impl Control {
                 } else {
                     None
                 };
-                self.wheel(point, dx, dy, ex).await
+                self.wheel(point, dx, dy, via, ex).await
             }
             "browser.wait" => {
                 let count = ["text", "url", "load", "settled"]
@@ -1235,6 +1255,35 @@ impl Control {
             _ => Err(format!("Unknown browser command: {command}")),
         }
     }
+}
+
+fn number(v: &Value, i: usize) -> f64 {
+    v[i].as_f64().unwrap_or(0.)
+}
+
+/// What a scroll did, from each scroller's `[left, top, max_left, max_top]` before and after.
+fn scroll_report(before: &Value, after: &Value, dx: f64, dy: f64) -> Value {
+    let pairs: Vec<(&Value, &Value)> = match (before.as_array(), after.as_array()) {
+        (Some(was), Some(is)) if was.len() == is.len() => was.iter().zip(is).collect(),
+        _ => return json!({"ok":true,"measured":false}),
+    };
+    // Report the scroller that moved; when none did, the innermost one under the point.
+    let Some((was, is)) = pairs.iter().find(|(was, is)| was != is).or(pairs.first()) else {
+        return json!({"ok":true,"moved":false,"dx":0,"dy":0});
+    };
+    let (moved_x, moved_y) = (number(is, 0) - number(was, 0), number(is, 1) - number(was, 1));
+    // Offsets are fractional while the limits are whole pixels: allow one pixel.
+    let stopped = |asked: f64, at: f64, max: f64| {
+        if asked > 0. { at >= max - 1. } else { asked == 0. || at <= 0. }
+    };
+    json!({
+        "ok": true,
+        "moved": moved_x != 0. || moved_y != 0.,
+        "dx": moved_x, "dy": moved_y,
+        "left": number(is, 0), "top": number(is, 1),
+        "max_left": number(is, 2), "max_top": number(is, 3),
+        "at_end": stopped(dx, number(is, 0), number(is, 2)) && stopped(dy, number(is, 1), number(is, 3)),
+    })
 }
 
 /// Largest browser.eval result, as JSON text.

@@ -218,7 +218,7 @@ def main():
         moved = command('browser.scroll', dy=700)
         command('browser.wait', text='Scroll received')
         # Chromium decides the distance (743.5 px for a 700 px wheel here); the reply is what it measured.
-        assert moved['moved'] and not moved['at_end'] and 500 < moved['dy'] < 900 and moved['dy'] <= moved['top'] < moved['max_top'], moved
+        assert moved['via'] == 'wheel' and moved['moved'] and not moved['at_end'] and 500 < moved['dy'] < 900 and moved['dy'] <= moved['top'] < moved['max_top'], moved
         assert 'Box scrolled' not in command('browser.read')['text']
         end = command('browser.scroll', dy=100000)
         assert end['moved'] and end['at_end'], end
@@ -261,7 +261,17 @@ def main():
                 pass
             assert time.monotonic() < deadline, f'Hidden browser did not start: {work}'
         command('browser.click', pane=hidden, name='Click me')
-        assert 'Clicked safely' in command('browser.read', pane=hidden)['text']
+        # A window on screen stops rendering a page nobody is viewing and a wheel stalls there,
+        # so such a page is scrolled by script. This background window never hides one: ask for it.
+        assert command('browser.scroll', pane=hidden, dy=300)['via'] == 'wheel'
+        command('browser.scroll', pane=hidden, dy=-100000, via='script')
+        unseen = command('browser.scroll', pane=hidden, dy=300, via='script')
+        assert unseen['via'] == 'script' and unseen['moved'] and unseen['top'] == 300 and not unseen['at_end'], unseen
+        assert command('browser.scroll', pane=hidden, dy=100000, via='script')['at_end']
+        boxed = command('browser.scroll', pane=hidden, name='Inner top', dy=200, via='script')
+        assert boxed['via'] == 'script' and boxed['top'] == 200 < boxed['max_top'] < 1000, boxed
+        command('browser.scroll', pane=hidden, dy=10, via='teleport', expect_error='via must be')
+        command('browser.scroll', pane=hidden, name='Inner top', via='script', expect_error='via applies')
         command('pane.close', pane=hidden)
         command('pane.close', pane=pane)
         time.sleep(.2)
