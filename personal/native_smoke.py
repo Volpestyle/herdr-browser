@@ -16,9 +16,10 @@ ROOT = Path(__file__).resolve().parents[1]
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--binary', default=str(ROOT / '.local/preview/Herdr Browser.app/Contents/MacOS/HerdrBrowser'))
+    parser.add_argument('--work', default=None)
     parser.add_argument('--keep', action='store_true')
     args = parser.parse_args()
-    work = ROOT / '.local/native-smoke' / str(time.time_ns())
+    work = Path(args.work) if args.work else ROOT / '.local/native-smoke' / str(time.time_ns())
     home = work / 'home'; pages = work / 'pages'
     home.mkdir(parents=True); pages.mkdir()
     (home / 'shared.json').write_text('{"frame.welcomed":"finished"}')
@@ -143,6 +144,17 @@ def main():
         command('browser.navigate', pane=pane, url=url + '/one.html')
         until(lambda: inspected().get('title') == 'one.html / JavaScript ready', 'page after download')
         command('browser.focus_url', pane=pane)
+        command('browser.find', pane=pane, query='Chromium')
+        found = until(lambda: (x if (x := inspected()).get('find_open') and (x.get('find_matches') or [0, 0])[1] >= 1 else None), 'find in page match result')
+        assert found['find_query'] == 'Chromium' and found['find_matches'][1] == 1, found
+        dest = command('space.new', name='Move target', folder=str(work), tab='Dest')
+        moved_tab = command('tab.new', name='Movable', space=shell['space'])
+        command('tab.move', id=moved_tab['tab'], space=dest['space'], index=1)
+        ls_moved = listing()
+        dest_sp = next(s for s in ls_moved['spaces'] if s['id'] == dest['space'])
+        assert dest_sp['tabs'][0]['id'] == moved_tab['tab'], dest_sp
+        command('space.close', id=dest['space'], confirmed=True)
+        command('space.select', id=shell['space'])
         md_file = pages / 'notes.md'
         md_file.write_text('# Built-in Markdown\n\n> [!WARNING]\n> Initial warning text.\n')
         md_browser = command('browser.markdown', profile='agent', path=str(md_file))

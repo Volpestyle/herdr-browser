@@ -237,6 +237,26 @@ wrap_download_handler! {
         }
     }
 }
+wrap_find_handler! {
+    struct Find { tx: Tx }
+    impl FindHandler {
+        fn on_find_result(
+            &self,
+            _browser: Option<&mut Browser>,
+            _identifier: i32,
+            count: i32,
+            _selection_rect: Option<&Rect>,
+            active_match_ordinal: i32,
+            final_update: i32,
+        ) {
+            let _ = self.tx.try_send(Event::FindResult {
+                count: count.max(0) as usize,
+                active: active_match_ordinal.max(0) as usize,
+                final_update: final_update != 0,
+            });
+        }
+    }
+}
 wrap_client! {
     struct PageClient { tx: Tx, ask: bool, gate: Arc<AtomicBool>, browser: std::rc::Weak<RefCell<Option<Browser>>>, closing: Rc<Cell<bool>>, pending: Rc<Cell<bool>>, container: Retained<NSView> }
     impl Client {
@@ -247,6 +267,7 @@ wrap_client! {
         fn focus_handler(&self) -> Option<FocusHandler> { Some(Focus::new(self.gate.clone())) }
         fn keyboard_handler(&self) -> Option<KeyboardHandler> { Some(Keys::new()) }
         fn download_handler(&self) -> Option<DownloadHandler> { Some(Download::new(self.tx.clone(), self.ask)) }
+        fn find_handler(&self) -> Option<FindHandler> { Some(Find::new(self.tx.clone())) }
     }
 }
 pub struct Host {
@@ -258,6 +279,7 @@ pub struct Host {
     window: Retained<NSWindow>,
     shown: Cell<bool>,
     allowed: Rc<Cell<bool>>,
+    find_open: Rc<Cell<bool>>,
     bounds: Cell<Option<[f64; 4]>>,
     cut: Cell<f64>,
     focus_pending: Cell<bool>,
@@ -379,6 +401,7 @@ fn shortcut(key: &str, shift: bool, option: bool) -> Option<&'static str> {
         ("]" | "}", true) => Some("tab.next"),
         ("[", false) => Some("browser.back"),
         ("]", false) => Some("browser.forward"),
+        ("f", false) => Some("browser.find"),
         ("l", false) => Some("browser.focus_url"),
         ("r", false) => Some("browser.reload"),
         ("b", false) => Some("layout.toggle:sidebar"),
@@ -498,7 +521,9 @@ impl Host {
                 }
             })
         });
+        let find_open = Rc::new(Cell::new(false));
         let event_allowed = allowed.clone();
+        let event_find_open = find_open.clone();
         let event_container = container.clone();
         let event_parent = parent.clone();
         let event_window = native_window.clone();
@@ -565,15 +590,19 @@ impl Host {
             let option = flags.contains(NSEventModifierFlags::Option);
             // App navigation remains available before a page has a focused frame.
             if let Some(command) = shortcut(&key, shift, option) {
-                let _ = tx.try_send(if command == "browser.focus_url" {
-                    Event::FocusUrl
-                } else {
-                    Event::Command(command)
+                let _ = tx.try_send(match command {
+                    "browser.focus_url" => Event::FocusUrl,
+                    "browser.find" => Event::Find,
+                    _ => Event::Command(command),
                 });
                 return std::ptr::null_mut();
             }
             if option {
                 return event.as_ptr();
+            }
+            if event_find_open.get() && key == "g" {
+                let _ = tx.try_send(Event::FindNext(!shift));
+                return std::ptr::null_mut();
             }
             // The page sees the edit shortcuts first (Linear copies an issue on
             // Cmd+C); Keys runs the command for the ones it leaves unhandled.
@@ -600,6 +629,7 @@ impl Host {
             window: native_window,
             shown: Cell::new(false),
             allowed,
+            find_open,
             bounds: Cell::new(None),
             cut: Cell::new(0.),
             focus_pending: Cell::new(true),
@@ -716,6 +746,23 @@ impl Host {
         frame.load_url(Some(&url.into()));
         Ok(())
     }
+    pub fn set_find_open(&self, open: bool) {
+        self.find_open.set(open);
+    }
+    pub fn find(&self, text: &str, forward: bool, find_next: bool) {
+        if let Some(host) = self.browser.borrow().as_ref().and_then(|b| b.host()) {
+            if text.is_empty() {
+                host.stop_finding(1);
+            } else {
+                host.find(Some(&text.into()), forward as i32, 0, find_next as i32);
+            }
+        }
+    }
+    pub fn stop_finding(&self, clear_selection: bool) {
+        if let Some(host) = self.browser.borrow().as_ref().and_then(|b| b.host()) {
+            host.stop_finding(clear_selection as i32);
+        }
+    }
     pub fn command(&self, command: &str) -> Result<(), String> {
         let browser = self.browser.borrow();
         let browser = browser.as_ref().ok_or("Browser is closed")?;
@@ -801,6 +848,7 @@ mod tests {
             shortcut("b", false, true),
             keys["global"]["cmd-alt-b"].as_str()
         );
+        assert_eq!(shortcut("f", false, false), Some("browser.find"));
         assert_eq!(shortcut("l", false, true), None);
     }
 }

@@ -583,3 +583,102 @@ test("space tooltips summarize Clankie spaces, git context, tab status, and shor
   const tenth = spaceTooltip({ id: "sp10", name: "notes", folder: "/home/u/notes", tabs: [] }, 9, null, "macos");
   expect(tenth).toBe("notes · u/notes");
 });
+
+test("unnamed browser tabs in spaces show their page title or url host", () => {
+  const tabName = new Function("View", `${source}; return tabName;`)(class {});
+  expect(tabName({ name: "1", named: false }, { mod: "native-browser", title: "Datadog Monitor", url: "https://app.datadoghq.com/monitors/1" })).toBe("Datadog Monitor");
+  expect(tabName({ name: "1", named: false }, { mod: "native-browser", title: "native-browser", url: "https://www.linear.app/vibes" })).toBe("linear.app");
+  expect(tabName({ name: "1", named: false }, { mod: "native-browser", title: "", url: "http://localhost:3000" })).toBe("localhost:3000");
+  expect(tabName({ name: "Custom", named: true }, { mod: "native-browser", title: "Datadog Monitor", url: "https://app.datadoghq.com" })).toBe("Custom");
+});
+
+test("dragging tabs in spaces reorders within a space and moves across spaces on the same machine", () => {
+  const ran: [string, unknown][] = [];
+  const snapshot: any[] = [
+    { id: "s1", name: "general", folder: "/a", active: true, tabs: [{ id: "t1", name: "one" }, { id: "t2", name: "two" }, { id: "t3", name: "three" }] },
+    { id: "s2", name: "watchdog", folder: "/b", active: false, tabs: [{ id: "t4", name: "four" }] },
+    { id: "s3", name: "remote", folder: "/r", machine: "cloud", active: false, tabs: [{ id: "t5", name: "five" }] },
+  ];
+  const byId = new Map<string, Record<string, (...args: any[]) => void>>();
+  const makeEl = (): any => {
+    let id = "";
+    const handlers: Record<string, (...args: any[]) => void> = {};
+    const proxy: any = new Proxy({}, {
+      get: (_, method) => (...args: any[]) => {
+        if (method === "id") {
+          id = String(args[0]);
+          byId.set(id, handlers);
+        } else if (method === "when") {
+          if (args[0]) args[1](proxy);
+        } else if (String(method).startsWith("on_")) {
+          const key = method === "on_mouse_down" || method === "on_mouse_up" ? `${String(method)}:${args[0]}` : String(method);
+          handlers[key] = args.at(-1);
+        }
+        return proxy;
+      },
+    });
+    return proxy;
+  };
+  const Spaces = new Function("View", "hc", "localStorage", "spaces", "panes", "run", "openOverlay", "v_flex", "h_flex", "div", "svg", "image", "shared", "machines", "exec", "window", "watchFolder", "ScrollHandle", "theme", "layout", "setShared", `${source}; return Spaces;`)(
+    class {}, async () => ({ code: 0, stdout: "{}", stderr: "" }),
+    { setItem() {}, getItem: () => null },
+    () => snapshot, () => [],
+    (name: string, args: unknown) => ran.push([name, args]),
+    () => {},
+    makeEl, makeEl, makeEl, makeEl, makeEl,
+    () => null, () => [{ name: null, layout: "ready" }], undefined, () => ({ active: true }), undefined,
+    { new: () => ({ scroll_to_item() {} }) },
+    () => new Proxy({}, { get: () => "#000000" }), () => null, () => {},
+  );
+  const view = new Spaces();
+  view.reconnecting = {};
+  view.folded = new Set();
+  view.open = new Set(["s1", "s2", "s3"]);
+  view.pressed = null;
+  view.over = null;
+  view.tabPressed = null;
+  view.tabOver = null;
+  const cx = { stop_propagation() {}, notify() {} };
+  const t = new Proxy({}, { get: () => "#000000" });
+
+  // Reorder t1 onto t3 within s1
+  view.tabRows(snapshot[0], t, []);
+  byId.get("space-tab-t1")!["on_mouse_down:left"]({}, cx);
+  byId.get("space-tab-t3")!["on_mouse_move"]({}, cx);
+  byId.get("space-tab-t3")!["on_mouse_up:left"]({}, cx);
+  expect(ran).toEqual([["tab.move", { id: "t1", index: 3 }]]);
+
+  // Click t2 without dragging selects it
+  ran.length = 0;
+  view.tabRows(snapshot[0], t, []);
+  byId.get("space-tab-t2")!["on_mouse_down:left"]({}, cx);
+  byId.get("space-tab-t2")!["on_mouse_up:left"]({}, cx);
+  expect(ran).toEqual([["tab.select", { id: "t2" }]]);
+
+  // Drag t2 from s1 onto t4 in s2 (same machine)
+  ran.length = 0;
+  view.tabRows(snapshot[0], t, []);
+  view.tabRows(snapshot[1], t, []);
+  byId.get("space-tab-t2")!["on_mouse_down:left"]({}, cx);
+  byId.get("space-tab-t4")!["on_mouse_move"]({}, cx);
+  byId.get("space-tab-t4")!["on_mouse_up:left"]({}, cx);
+  expect(ran).toEqual([["tab.move", { id: "t2", space: "s2", index: 1 }]]);
+
+  // Drag t2 from s1 onto s2 space header row
+  ran.length = 0;
+  view.tabRows(snapshot[0], t, []);
+  view.row({ w: snapshot[1], i: 1, g: null, tree: null }, t);
+  byId.get("space-tab-t2")!["on_mouse_down:left"]({}, cx);
+  byId.get("space-s2")!["on_mouse_move"]({}, cx);
+  byId.get("space-s2")!["on_mouse_up:left"]({}, cx);
+  expect(ran).toEqual([["tab.move", { id: "t2", space: "s2" }]]);
+
+  // Cross-machine drag from s1 onto s3 is refused
+  ran.length = 0;
+  view.tabRows(snapshot[0], t, []);
+  view.tabRows(snapshot[2], t, []);
+  byId.get("space-tab-t2")!["on_mouse_down:left"]({}, cx);
+  byId.get("space-tab-t5")!["on_mouse_move"]({}, cx);
+  byId.get("space-tab-t5")!["on_mouse_up:left"]({}, cx);
+  expect(ran).toEqual([]);
+});

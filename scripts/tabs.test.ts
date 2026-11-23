@@ -140,3 +140,11 @@ test("a shell's title never replaces its tab's name", () => {
   expect(label({ name: "notes", named: true }, shell)).toBe("notes");
   expect(label({ name: "", named: false }, undefined)).toBe("Terminal");
 });
+
+test("an unnamed browser tab uses its page title or url host, while a manual name stays", () => {
+  expect(label({ name: "", named: false }, { mod: "native-browser", title: "Linear", url: "https://linear.app/vibes" })).toBe("Linear");
+  expect(label({ name: "", named: false }, { mod: "native-browser", title: "native-browser", url: "https://www.github.com/Volpestyle" })).toBe("github.com");
+  expect(label({ name: "", named: false }, { mod: "native-browser", title: "", url: "http://localhost:3000/app" })).toBe("localhost:3000");
+  expect(label({ name: "", named: false }, { mod: "native-browser", title: "", url: "about:blank" })).toBe("Browser");
+  expect(label({ name: "Docs", named: true }, { mod: "native-browser", title: "Linear", url: "https://linear.app" })).toBe("Docs");
+});

@@ -14,11 +14,23 @@ function find(node, id) {
 // Same as the agents mod: drops a status glyph, keeps a leading bracket or quote.
 const clean = (s) => (s ?? "").replace(/^[^\p{L}\p{N}\p{Ps}\p{Pi}]+/u, "").replace(/^\[ [!.] \] /, "").trim();
 
+function browserLabel(lead) {
+  const title = (lead?.title ?? "").trim();
+  if (title && title !== "native-browser" && title !== "Browser") return title;
+  if (lead?.url) {
+    try {
+      const u = new URL(lead.url);
+      if (u.host) return u.host.replace(/^www\./, "");
+    } catch {}
+  }
+  return "Browser";
+}
+
 // A tab Herdr named (unnamed, or after its program) follows its agent's live
 // title, as the agents list does; a name the person gave stays.
 function label(tab, lead) {
   const prog = lead?.program?.name;
-  const base = tab.named ? tab.name : prog ?? (lead?.mod === "native-browser" ? "Browser" : "Terminal");
+  const base = tab.named ? tab.name : prog ?? (lead?.mod === "native-browser" ? browserLabel(lead) : "Terminal");
   if (!lead?.program?.agent) return base;
   const live = clean(lead.title);
   // clean() would strip a path's leading ~ or /: test the title with only its status glyph gone.

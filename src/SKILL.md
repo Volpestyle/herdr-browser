@@ -102,7 +102,8 @@ endpoints from `focused().selection` or `terminals()`; null means none (or no
 attached view). Use `selection.end` as a copy-mode cursor. Selection facts update
 when the selection changes, without refreshing readers on ordinary terminal output.
 
-`terminal.search` opens a find bar in the focused terminal. It searches that
+`terminal.search` opens a find bar in the focused terminal (or opens find-in-page
+when a native browser pane is focused). It searches that
 terminal's screen and scrollback; Enter and Shift-Enter move between matches,
 Escape closes the bar while its find field has focus, and each terminal keeps its own query (reopening selects it, so typing replaces it).
 Clicking the terminal while the bar is open puts typing, including Escape, back in the program; the bar and its matches stay.
@@ -214,7 +215,7 @@ From a script or agent (`herdr-browser do`), `browser.open` and `browser.markdow
 opens a local Markdown file or folder on a token-gated loopback preview server with live reload, TOC, syntax highlighting, GitHub alerts, and interactive Mermaid diagrams (Cmd-click on a `.md` link in a terminal opens a tab; Shift+Cmd-click splits it beside that pane).
 The + menu's Browser item uses it. It runs on this Mac even in a remote space.
 `browser.navigate {url, pane?}`, `browser.back {pane?}`, `browser.forward {pane?}`,
-`browser.reload {pane?}`, `browser.focus_url {pane?}`, `browser.devtools {pane?}`
+`browser.reload {pane?}`, `browser.focus_url {pane?}`, `browser.find {query?, pane?}`, `browser.devtools {pane?}`
 and `browser.inspect {pane?}` address an explicit pane. From a terminal, omitting
 `pane` targets the browser that terminal opened most recently (`HC_TERMINAL_ID`, or `HERDR_PANE_ID`),
 never the focused pane. With no caller mapping, pass `pane` explicitly. Mappings

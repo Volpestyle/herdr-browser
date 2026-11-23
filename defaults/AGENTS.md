@@ -587,7 +587,7 @@ The main ones:
   props?, focus?}` for a tab whose only pane is a mod (a file, a board; split a shell
   in beside it like any tab), `tab.close {id?, confirmed?}` (closing the last tab
   closes its space and asks first unless confirmed),
-  `tab.rename {id?, name}` ("": its number again), `tab.move {id?, index | by}` (by: places left (-) or right (+), skipping settled tabs as `tab.next` does, wrapping),
+  `tab.rename {id?, name}` ("": its number again), `tab.move {id?, index | by | space}` (by: places left (-) or right (+), skipping settled tabs as `tab.next` does, wrapping; space: move to another space on the same machine, with optional index),
   `tab.select {index | id}`, `tab.next`, `tab.prev`,
   `tab.settle {id?}`, `tab.unsettle {id?}` (index, next and prev
   skip settled tabs).
@@ -619,8 +619,7 @@ The main ones:
   starting directory for tabs and right/down splits, with or without `argv`), `terminal.kill {terminal}`,
   `terminal.keep {terminal, place?}`, `terminal.park {terminal}`,
   `terminal.peek {terminal}` (peek over the tab, with keep-as-tab and close),
-  `terminal.show {terminal?, pane?}`, `terminal.search` (screen and scrollback;
-  find bar state stays with that terminal), `terminal.select_all {terminal?}` (selects the whole
+  `terminal.show {terminal?, pane?}`, `terminal.search` (searches the focused terminal's screen and scrollback, or opens find-in-page on a focused native browser; find bar state stays with that pane), `terminal.select_all {terminal?}` (selects the whole
   screen and scrollback for copying; only the alternate screen in vim and similar apps;
   Cmd+A on macOS, no default on Linux/Windows), `terminal.copy`, `terminal.paste` (copied
   files, such as Finder's or a clipboard manager's image, as if dropped; an image
@@ -1190,7 +1189,7 @@ From a script or agent (`herdr-browser do`), `browser.open` and `browser.markdow
 opens a local Markdown file or folder on a token-gated loopback preview server with live reload, TOC, syntax highlighting, GitHub alerts, and interactive Mermaid diagrams (Cmd-click on a `.md` link in a terminal opens a tab; Shift+Cmd-click splits it beside that pane).
 The + menu's Browser item uses it. It runs on this Mac even in a remote space.
 `browser.navigate {url, pane?}`, `browser.back {pane?}`, `browser.forward {pane?}`,
-`browser.reload {pane?}`, `browser.focus_url {pane?}`, `browser.devtools {pane?}`
+`browser.reload {pane?}`, `browser.focus_url {pane?}`, `browser.find {query?, pane?}`, `browser.devtools {pane?}`
 and `browser.inspect {pane?}` address an explicit pane. From a terminal, omitting
 `pane` targets the browser that terminal opened most recently (`HC_TERMINAL_ID`, or `HERDR_PANE_ID`),
 never the focused pane. With no caller mapping, pass `pane` explicitly. Mappings

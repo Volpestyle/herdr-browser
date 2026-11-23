@@ -207,6 +207,53 @@ impl Model {
         true
     }
 
+    pub fn move_tab_to_space(&mut self, id: &str, space_id: &str, index: Option<usize>) -> bool {
+        let Some(from_si) = self.spaces.iter().position(|p| p.tabs.iter().any(|c| c.id == id)) else {
+            return false;
+        };
+        let Some(mut to_si) = self.spaces.iter().position(|p| p.id == space_id) else {
+            return false;
+        };
+        if from_si == to_si {
+            return match index {
+                Some(i) => self.move_tab(id, i),
+                None => true,
+            };
+        }
+        if self.spaces[from_si].machine != self.spaces[to_si].machine {
+            return false;
+        }
+        let was_active_space = self.active.as_deref() == Some(self.spaces[from_si].id.as_str());
+        let from_ci = self.spaces[from_si].tabs.iter().position(|c| c.id == id).unwrap();
+        let was_active_tab = self.spaces[from_si].active.as_deref() == Some(id);
+        let tab = self.spaces[from_si].tabs.remove(from_ci);
+        if was_active_tab {
+            self.spaces[from_si].active = self.spaces[from_si]
+                .tabs
+                .get(from_ci)
+                .or(self.spaces[from_si].tabs.last())
+                .map(|c| c.id.clone());
+        }
+        if self.spaces[from_si].tabs.is_empty() {
+            let from_id = self.spaces[from_si].id.clone();
+            self.remove_space(&from_id);
+            if from_si < to_si {
+                to_si -= 1;
+            }
+        }
+        let to = index
+            .map(|i| i.saturating_sub(1).min(self.spaces[to_si].tabs.len()))
+            .unwrap_or(self.spaces[to_si].tabs.len());
+        self.spaces[to_si].tabs.insert(to, tab);
+        if was_active_space && was_active_tab {
+            self.spaces[to_si].active = Some(id.to_owned());
+            self.active = Some(self.spaces[to_si].id.clone());
+        } else if self.spaces[to_si].active.is_none() {
+            self.spaces[to_si].active = Some(id.to_owned());
+        }
+        true
+    }
+
     /// Moves a tab `by` places, skipping settled tabs as `tab.next` does, wrapping at
     /// either end.
     pub fn shift_tab(&mut self, id: &str, by: i64) -> bool {
@@ -779,6 +826,28 @@ mod tests {
         assert_eq!(tabs(&m), ["c2", "c1"]);
         assert!(m.move_tab("c2", 9));
         assert_eq!(tabs(&m), ["c1", "c2"]);
+    }
+
+    #[test]
+    fn move_tab_to_space_moves_within_same_machine_and_cleans_empty_source() {
+        let mut m = Model::default();
+        m.add_space("s1", "one", "/one", Tab::new("c1", "", "x1", "t1"));
+        m.add_tab("s1", Tab::new("c2", "", "x2", "t2"));
+        m.add_space("s2", "two", "/two", Tab::new("c3", "", "x3", "t3"));
+        m.add_space("s3", "remote", "/r", Tab::new("c4", "", "x4", "r/t4"));
+        m.space_mut("s3").unwrap().machine = Some("cloud".into());
+        m.select_tab("c2");
+
+        assert!(!m.move_tab_to_space("c2", "s3", None));
+        assert!(m.move_tab_to_space("c2", "s2", Some(1)));
+        assert_eq!(m.space("s1").unwrap().tabs.iter().map(|c| c.id.as_str()).collect::<Vec<_>>(), ["c1"]);
+        assert_eq!(m.space("s2").unwrap().tabs.iter().map(|c| c.id.as_str()).collect::<Vec<_>>(), ["c2", "c3"]);
+        assert_eq!(m.active.as_deref(), Some("s2"));
+        assert_eq!(m.active_tab().map(|c| c.id.as_str()), Some("c2"));
+
+        assert!(m.move_tab_to_space("c1", "s2", None));
+        assert!(m.space("s1").is_none());
+        assert_eq!(m.space("s2").unwrap().tabs.iter().map(|c| c.id.as_str()).collect::<Vec<_>>(), ["c2", "c3", "c1"]);
     }
 
     #[test]

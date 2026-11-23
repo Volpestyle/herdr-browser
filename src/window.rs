@@ -305,6 +305,7 @@ struct Copy {
     id: u64,
     root: Option<Entity<ShellRoot>>,
     browser: Option<Entity<crate::browser::Browser>>,
+    _sub: Option<Subscription>,
     _watch: Option<Watcher>,
     error: Option<String>,
 }
@@ -1740,6 +1741,20 @@ impl AppWindow {
             .or_else(|| self.model.focused_pane().and_then(|p| self.pane_term(&p)))
     }
 
+    fn focused_browser(&self, window: &Window, cx: &App) -> Option<Entity<crate::browser::Browser>> {
+        if let Some(browser) = self.copies.values().filter_map(|c| c.browser.as_ref()).find(|b| b.read(cx).owns_focus(window, cx)) {
+            return Some(browser.clone());
+        }
+        if self.terms.values().any(|t| t.view.read(cx).owns_keyboard_focus(window, cx)) {
+            return None;
+        }
+        self.focused_pane
+            .as_deref()
+            .and_then(|p| self.copies.get(p))
+            .and_then(|c| c.browser.clone())
+            .or_else(|| self.model.focused_pane().and_then(|p| self.copies.get(&p)).and_then(|c| c.browser.clone()))
+    }
+
     fn shown_terminal_view(&self, address: &str, window: &Window, cx: &App) -> Result<Entity<TerminalView>, String> {
         if !self.live.contains_key(address) {
             return Err(format!("no running terminal {address:?}"));
@@ -1800,9 +1815,13 @@ impl AppWindow {
     }
 
     fn load(&self, inst: Instance, slot: &str, window: &mut Window, cx: &mut Context<Self>) -> Copy {
-        let mut copy = Copy { inst, id: 0, root: None, browser: None, _watch: None, error: None };
+        let mut copy = Copy { inst, id: 0, root: None, browser: None, _sub: None, _watch: None, error: None };
         if copy.inst.name == crate::browser::MOD {
-            copy.browser = Some(cx.new(|cx| crate::browser::Browser::new(slot, &copy.inst.props, window, cx)));
+            let browser = cx.new(|cx| crate::browser::Browser::new(slot, &copy.inst.props, window, cx));
+            copy._sub = Some(cx.subscribe(&browser, |this, _, ev: &crate::browser::BrowserEvent, cx| match ev {
+                crate::browser::BrowserEvent::MetaChanged => this.publish(cx),
+            }));
+            copy.browser = Some(browser);
             return copy;
         }
         let (Some(runtime), Some(folder)) = (&self.runtime, self.folders.get(&copy.inst.name)) else {
@@ -1890,8 +1909,22 @@ impl AppWindow {
                     let focused = m.active.as_deref() == Some(pr.id.as_str()) && focused_pane.as_deref() == Some(p.id.as_str());
                     let zoomed = ctx.zoomed.as_deref() == Some(p.id.as_str());
                     // A mod pane: what it shows, no terminal.
-                    if let Some(Content::Mod { name, .. }) = p.content() {
-                        panes.push(json!({ "pane": p.id, "terminal": null, "mod": name, "tab": ctx.id, "title": name, "focused": focused, "zoomed": zoomed, "movable": self.pane_movable(&p.id) }));
+                    if let Some(Content::Mod { name, props }) = p.content() {
+                        if name == crate::browser::MOD {
+                            let (title, url) = self.copies.get(&p.id)
+                                .and_then(|c| c.browser.as_ref())
+                                .map(|b| {
+                                    let b = b.read(cx);
+                                    (b.display_title(), b.url().to_owned())
+                                })
+                                .unwrap_or_else(|| {
+                                    let url = props.get("url").and_then(Value::as_str).unwrap_or_default().to_owned();
+                                    (crate::browser::url_label(&url), url)
+                                });
+                            panes.push(json!({ "pane": p.id, "terminal": null, "mod": name, "tab": ctx.id, "title": title, "url": url, "focused": focused, "zoomed": zoomed, "movable": self.pane_movable(&p.id) }));
+                        } else {
+                            panes.push(json!({ "pane": p.id, "terminal": null, "mod": name, "tab": ctx.id, "title": name, "focused": focused, "zoomed": zoomed, "movable": self.pane_movable(&p.id) }));
+                        }
                         continue;
                     }
                     let Some(addr) = p.terminal() else { continue };
@@ -3115,7 +3148,7 @@ impl AppWindow {
                 };
                 self.answer(result);
             }
-            "browser.navigate" | "browser.back" | "browser.forward" | "browser.reload" | "browser.focus_url" | "browser.inspect" | "browser.devtools" | "browser.cdp" | "browser.snapshot" | "browser.read" | "browser.eval" | "browser.download" | "browser.click" | "browser.type" | "browser.signin" | "browser.press" | "browser.scroll" | "browser.wait" | "browser.screenshot" | "browser.record" => {
+            "browser.navigate" | "browser.back" | "browser.forward" | "browser.reload" | "browser.focus_url" | "browser.find" | "browser.inspect" | "browser.devtools" | "browser.cdp" | "browser.snapshot" | "browser.read" | "browser.eval" | "browser.download" | "browser.click" | "browser.type" | "browser.signin" | "browser.press" | "browser.scroll" | "browser.wait" | "browser.screenshot" | "browser.record" => {
                 let pane = Self::owned(a, "pane").or_else(|| person.then(|| self.model.focused_pane()).flatten());
                 let view = pane.as_ref().and_then(|p| self.copies.get(p)).and_then(|c| c.browser.clone());
                 let Some(view) = view else { return self.fail("Focus a native browser pane or pass its pane id"); };
@@ -3208,10 +3241,33 @@ impl AppWindow {
             }
             "tab.move" => {
                 let Some(id) = Self::owned(a, "id").or(active_ctx) else { return self.fail("no tab") };
-                let moved = match (a.get("index").and_then(Value::as_u64), a.get("by").and_then(Value::as_i64)) {
-                    (Some(i), None) => self.model.move_tab(&id, i as usize),
-                    (None, Some(by)) => self.model.shift_tab(&id, by),
-                    _ => return self.fail("tab.move needs index or by"),
+                let space = Self::owned(a, "space");
+                let index = a.get("index").and_then(Value::as_u64).map(|i| i as usize);
+                let by = a.get("by").and_then(Value::as_i64);
+                let moved = match (space.as_deref(), index, by) {
+                    (Some(space_id), index, None) => {
+                        let moved = self.model.move_tab_to_space(&id, space_id, index);
+                        if moved {
+                            let machine = self.model.space(space_id).and_then(|s| s.machine.clone());
+                            let local_space = crate::mirror::local(space_id, machine.as_deref());
+                            let addrs: Vec<String> = self.model.tab(&id).map(|c| model::addresses(&c.root)).unwrap_or_default();
+                            for addr in addrs {
+                                if !self.live.contains_key(&addr) { continue; }
+                                let core = self.core.clone();
+                                let params = json!({ "terminal": addr, "labels": { "herdr.space": local_space } });
+                                cx.background_executor().spawn(async move {
+                                    if let Err(e) = core.call("terminal.label", params) {
+                                        tracing::warn!("tab.move space label: {e:#}");
+                                    }
+                                }).detach();
+                            }
+                        }
+                        moved
+                    }
+                    (Some(_), _, Some(_)) => return self.fail("tab.move takes space with optional index, not by"),
+                    (None, Some(i), None) => self.model.move_tab(&id, i),
+                    (None, None, Some(by)) => self.model.shift_tab(&id, by),
+                    _ => return self.fail("tab.move needs index, by, or space"),
                 };
                 if !moved { return self.fail(format!("no tab {id:?}")); }
             }
@@ -3417,7 +3473,11 @@ impl AppWindow {
                 }
             }
             "terminal.search" => {
-                let Some(t) = self.focused_terminal(window, cx) else { return self.fail("no focused terminal to search") };
+                if let Some(browser) = self.focused_browser(window, cx) {
+                    browser.update(cx, |view, cx| view.open_find(None, window, cx));
+                    return;
+                }
+                let Some(t) = self.focused_terminal(window, cx) else { return self.fail("no focused terminal or browser to search") };
                 t.view.update(cx, |view, cx| view.open_search(window, cx));
                 return;
             }

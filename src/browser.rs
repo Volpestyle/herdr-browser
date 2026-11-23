@@ -46,6 +46,11 @@ pub fn opens_links() -> bool {
         .is_some_and(|v| v["links"] == "system")
 }
 
+#[derive(Debug, Clone, Copy)]
+pub enum BrowserEvent {
+    MetaChanged,
+}
+
 #[derive(Debug)]
 pub enum Event {
     Ready,
@@ -55,11 +60,45 @@ pub enum Event {
     Open(String),
     Command(&'static str),
     FocusUrl,
+    Find,
+    FindNext(bool),
+    FindResult {
+        count: usize,
+        active: usize,
+        final_update: bool,
+    },
     Focused,
     Notice(String),
     Error(String),
     Auth(Auth),
     Closed,
+}
+
+pub fn url_label(url: &str) -> String {
+    let trimmed = url.trim();
+    if trimmed.is_empty() || trimmed == "about:blank" {
+        return "Browser".into();
+    }
+    let Ok(parsed) = url::Url::parse(trimmed) else {
+        return "Browser".into();
+    };
+    let Some(host) = parsed.host_str() else {
+        return "Browser".into();
+    };
+    let host = host.strip_prefix("www.").unwrap_or(host);
+    match parsed.port() {
+        Some(port) => format!("{host}:{port}"),
+        None => host.to_owned(),
+    }
+}
+
+fn same_host(a: &str, b: &str) -> bool {
+    let host = |s: &str| {
+        url::Url::parse(s)
+            .ok()
+            .and_then(|u| Some((u.host_str()?.to_owned(), u.port())))
+    };
+    matches!((host(a), host(b)), (Some(ha), Some(hb)) if ha == hb)
 }
 
 /// A page's HTTP sign-in challenge, answered from the pane. Dropping it cancels.
@@ -155,6 +194,11 @@ pub struct Browser {
     pane: String,
     profile: String,
     input: Entity<InputState>,
+    find_input: Entity<InputState>,
+    find_open: bool,
+    find_query: String,
+    find_matches: Option<(usize, usize)>,
+    find_final: bool,
     url: String,
     title: String,
     loading: bool,
@@ -168,10 +212,13 @@ pub struct Browser {
     host: Option<Rc<macos::Host>>,
     recording: Cell<bool>,
     _input: Subscription,
+    _find_input: Subscription,
     _credentials: [Subscription; 2],
     _favorites: Subscription,
     _events: Task<()>,
 }
+
+impl EventEmitter<BrowserEvent> for Browser {}
 
 impl Browser {
     pub fn new(pane: &str, props: &Value, window: &mut Window, cx: &mut Context<Self>) -> Self {
@@ -187,16 +234,17 @@ impl Browser {
                     "Markdown".into(),
                 ),
             },
-            None => (
-                address(
+            None => {
+                let url = address(
                     props
                         .get("url")
                         .and_then(Value::as_str)
                         .unwrap_or("https://www.google.com"),
                 )
-                .unwrap_or_else(|_| "about:blank".into()),
-                "Browser".into(),
-            ),
+                .unwrap_or_else(|_| "about:blank".into());
+                let label = url_label(&url);
+                (url, label)
+            }
         };
         let input =
             cx.new(|cx| InputState::new(window, cx).placeholder("Search or enter an address"));
@@ -208,6 +256,24 @@ impl Browser {
                 this.focus_page();
             }
         });
+        let find_input = cx.new(|cx| InputState::new(window, cx).placeholder("Find in page"));
+        let find_subscription =
+            cx.subscribe_in(&find_input, window, |this, input, event, _window, cx| match event {
+                InputEvent::Change => {
+                    let next = input.read(cx).value().to_string();
+                    if this.find_query != next {
+                        this.find_query = next;
+                        this.find_matches = None;
+                        this.find_final = false;
+                        this.run_find(true, false);
+                        cx.notify();
+                    }
+                }
+                InputEvent::PressEnter { shift, .. } => {
+                    this.find_step(!shift, cx);
+                }
+                _ => {}
+            });
         let credentials = [
             cx.new(|cx| InputState::new(window, cx).placeholder("Username")),
             cx.new(|cx| InputState::new(window, cx).placeholder("Password").masked(true)),
@@ -252,6 +318,11 @@ impl Browser {
             pane: pane.into(),
             profile,
             input,
+            find_input,
+            find_open: false,
+            find_query: String::new(),
+            find_matches: None,
+            find_final: false,
             url,
             title: initial_title,
             loading: true,
@@ -265,10 +336,102 @@ impl Browser {
             #[cfg(target_os = "macos")]
             host,
             _input: subscription,
+            _find_input: find_subscription,
             _credentials: submit,
             _favorites: favorites,
             _events: events,
         }
+    }
+
+    pub fn url(&self) -> &str {
+        &self.url
+    }
+
+    pub fn display_title(&self) -> String {
+        let title = self.title.trim();
+        if !title.is_empty()
+            && title != "Browser"
+            && title != "about:blank"
+            && !title.starts_with("http://")
+            && !title.starts_with("https://")
+        {
+            return title.to_owned();
+        }
+        url_label(&self.url)
+    }
+
+    pub fn owns_focus(&self, window: &Window, cx: &App) -> bool {
+        self.is_focused()
+            || self.input.read(cx).focus_handle(cx).is_focused(window)
+            || self.find_input.read(cx).focus_handle(cx).is_focused(window)
+            || self
+                .credentials
+                .iter()
+                .any(|c| c.read(cx).focus_handle(cx).is_focused(window))
+    }
+
+    fn run_find(&mut self, forward: bool, find_next: bool) {
+        #[cfg(target_os = "macos")]
+        if let Some(host) = &self.host {
+            if self.find_query.is_empty() {
+                host.stop_finding(true);
+            } else {
+                host.find(&self.find_query, forward, find_next);
+            }
+        }
+        #[cfg(not(target_os = "macos"))]
+        let _ = (forward, find_next);
+    }
+
+    pub fn open_find(&mut self, query: Option<&str>, window: &mut Window, cx: &mut Context<Self>) {
+        #[cfg(target_os = "macos")]
+        if let Some(host) = &self.host {
+            host.focus_parent();
+            host.set_find_open(true);
+        }
+        let reopening = !self.find_open;
+        self.find_open = true;
+        if let Some(query) = query {
+            self.find_query = query.to_owned();
+            self.find_matches = None;
+            self.find_final = false;
+            self.find_input
+                .update(cx, |i, cx| i.set_value(query.to_owned(), window, cx));
+            self.run_find(true, false);
+        } else if reopening && !self.find_query.is_empty() {
+            self.find_matches = None;
+            self.find_final = false;
+            self.run_find(true, false);
+        }
+        self.find_input.update(cx, |i, cx| {
+            i.focus(window, cx);
+            i.select_all(window, cx);
+        });
+        cx.notify();
+    }
+
+    pub fn close_find(&mut self, _window: &mut Window, cx: &mut Context<Self>) {
+        if !self.find_open {
+            return;
+        }
+        self.find_open = false;
+        self.find_matches = None;
+        self.find_final = false;
+        #[cfg(target_os = "macos")]
+        if let Some(host) = &self.host {
+            host.set_find_open(false);
+            host.stop_finding(true);
+        }
+        self.focus_page();
+        cx.notify();
+    }
+
+    fn find_step(&mut self, forward: bool, cx: &mut Context<Self>) {
+        if !self.find_open || self.find_query.is_empty() {
+            return;
+        }
+        self.run_find(forward, true);
+        cx.notify();
     }
 
     fn event(&mut self, event: Event, window: &mut Window, cx: &mut Context<Self>) {
@@ -277,21 +440,44 @@ impl Browser {
             Event::Loading(url) => {
                 self.loading = true;
                 self.auth = None;
+                let url_changed = self.url != url;
+                if !same_host(&self.url, &url) {
+                    self.title = url_label(&url);
+                }
                 self.url = url;
+                if self.find_open {
+                    self.find_matches = None;
+                    self.find_final = false;
+                }
                 if !self.input.read(cx).focus_handle(cx).is_focused(window) {
                     self.input
                         .update(cx, |i, cx| i.set_value(self.url.clone(), window, cx));
+                }
+                if url_changed {
+                    cx.emit(BrowserEvent::MetaChanged);
                 }
             }
             Event::Loaded(url) => {
                 self.loading = false;
+                let url_changed = self.url != url;
                 self.url = url;
                 if !self.input.read(cx).focus_handle(cx).is_focused(window) {
                     self.input
                         .update(cx, |i, cx| i.set_value(self.url.clone(), window, cx));
                 }
+                if self.find_open && !self.find_query.is_empty() {
+                    self.run_find(true, false);
+                }
+                if url_changed {
+                    cx.emit(BrowserEvent::MetaChanged);
+                }
             }
-            Event::Title(title) => self.title = title,
+            Event::Title(title) => {
+                if self.title != title {
+                    self.title = title;
+                    cx.emit(BrowserEvent::MetaChanged);
+                }
+            }
             Event::Open(url) => {
                 crate::mods::request(crate::mods::Request::Run {
                     name: "browser.open".into(),
@@ -301,7 +487,7 @@ impl Browser {
             Event::Command(command) => {
                 if matches!(
                     command,
-                    "browser.back" | "browser.forward" | "browser.reload" | "browser.devtools"
+                    "browser.back" | "browser.forward" | "browser.reload" | "browser.devtools" | "browser.find"
                 ) {
                     let _ = self.command(command, &Value::Null, window, cx);
                 } else {
@@ -312,6 +498,18 @@ impl Browser {
                 }
             }
             Event::FocusUrl => self.focus_url(window, cx),
+            Event::Find => self.open_find(None, window, cx),
+            Event::FindNext(forward) => self.find_step(forward, cx),
+            Event::FindResult {
+                count,
+                active,
+                final_update,
+            } => {
+                if self.find_open && !self.find_query.is_empty() {
+                    self.find_matches = Some((active, count));
+                    self.find_final = final_update;
+                }
+            }
             Event::Focused => {
                 crate::mods::request(crate::mods::Request::Run {
                     name: "pane.focus".into(),
@@ -458,19 +656,27 @@ impl Browser {
         if let Some(host) = &self.host {
             host.navigate(&url).map_err(|e| e.to_string())?;
         }
+        if !same_host(&self.url, &url) {
+            self.title = url_label(&url);
+        }
         self.url = url.clone();
         self.loading = true;
         self.error = None;
         self.notice = None;
         self.auth = None;
+        if self.find_open {
+            self.find_matches = None;
+            self.find_final = false;
+        }
         self.input
             .update(cx, |i, cx| i.set_value(url.clone(), window, cx));
+        cx.emit(BrowserEvent::MetaChanged);
         cx.notify();
         Ok(json!({"url":url}))
     }
 
     pub fn inspect(&self) -> Value {
-        let mut out = json!({"engine":"Chromium/CEF", "pane":self.pane, "profile":self.profile, "url":self.url, "title":self.title, "loading":self.loading, "page_error":self.error, "notice":self.notice, "auth":self.auth.as_ref().map(|a| &a.host), "visible":self.allowed.get()});
+        let mut out = json!({"engine":"Chromium/CEF", "pane":self.pane, "profile":self.profile, "url":self.url, "title":self.title, "loading":self.loading, "page_error":self.error, "notice":self.notice, "auth":self.auth.as_ref().map(|a| &a.host), "visible":self.allowed.get(), "find_open":self.find_open, "find_query":self.find_query, "find_matches":self.find_matches.map(|(a, t)| json!([a, t]))});
         #[cfg(target_os = "macos")]
         if let Some(host) = &self.host {
             out["native"] = host.inspect();
@@ -604,6 +810,7 @@ impl Browser {
                 );
             }
             "browser.focus_url" => self.focus_url(window, cx),
+            "browser.find" => self.open_find(args.get("query").and_then(Value::as_str), window, cx),
             "browser.inspect" => return Ok(self.inspect()),
             #[cfg(target_os = "macos")]
             _ => {
@@ -777,6 +984,115 @@ impl Render for Browser {
                 )
                 .size_full(),
             );
+        let find_bar = self.find_open.then(|| {
+            let find_label = if self.find_query.is_empty() {
+                String::new()
+            } else if let Some((active, total)) = self.find_matches {
+                if total == 0 {
+                    if self.find_final {
+                        "No matches".to_owned()
+                    } else {
+                        "Searching…".to_owned()
+                    }
+                } else if active == 0 {
+                    format!("{total}")
+                } else {
+                    format!("{active} / {total}")
+                }
+            } else {
+                "Searching…".to_owned()
+            };
+            let nav_button = |id: &'static str, glyph: &'static str, forward: bool| {
+                div()
+                    .id(id)
+                    .w(px(26.))
+                    .h(px(26.))
+                    .flex()
+                    .items_center()
+                    .justify_center()
+                    .rounded_sm()
+                    .cursor_pointer()
+                    .text_color(color("foreground"))
+                    .hover(|s| s.bg(color("hover")))
+                    .on_click(cx.listener(move |this, _, window, cx| {
+                        this.find_step(forward, cx);
+                        this.find_input.update(cx, |i, cx| i.focus(window, cx));
+                    }))
+                    .child(glyph)
+            };
+            div()
+                .id("browser-find-bar")
+                .flex_none()
+                .h(px(36.))
+                .w_full()
+                .flex()
+                .items_center()
+                .justify_end()
+                .gap(px(4.))
+                .px(px(8.))
+                .bg(color("popover"))
+                .border_b_1()
+                .border_color(color("border"))
+                .on_key_down(cx.listener(|this, ev: &KeyDownEvent, window, cx| {
+                    if ev.keystroke.key == "escape" {
+                        this.close_find(window, cx);
+                        cx.stop_propagation();
+                    } else if ev.keystroke.key == "g"
+                        && (ev.keystroke.modifiers.platform || ev.keystroke.modifiers.control)
+                        && !ev.keystroke.modifiers.alt
+                    {
+                        this.find_step(!ev.keystroke.modifiers.shift, cx);
+                        cx.stop_propagation();
+                    } else if ev.keystroke.key == "f"
+                        && ev.keystroke.modifiers.platform
+                        && !ev.keystroke.modifiers.control
+                        && !ev.keystroke.modifiers.alt
+                        && !ev.keystroke.modifiers.shift
+                    {
+                        this.find_input.update(cx, |i, cx| i.select_all(window, cx));
+                        cx.stop_propagation();
+                    }
+                }))
+                .child(
+                    div()
+                        .flex_1()
+                        .max_w(px(320.))
+                        .h(px(26.))
+                        .flex()
+                        .items_center()
+                        .px(px(8.))
+                        .rounded_md()
+                        .bg(color("surface"))
+                        .border_1()
+                        .border_color(color("border"))
+                        .text_size(px(12.5))
+                        .child(Input::new(&self.find_input)),
+                )
+                .child(
+                    div()
+                        .w(px(64.))
+                        .text_xs()
+                        .text_color(color("muted"))
+                        .child(find_label),
+                )
+                .child(nav_button("browser-find-prev", "↑", false))
+                .child(nav_button("browser-find-next", "↓", true))
+                .child(
+                    div()
+                        .id("browser-find-close")
+                        .w(px(26.))
+                        .h(px(26.))
+                        .flex()
+                        .items_center()
+                        .justify_center()
+                        .rounded_sm()
+                        .cursor_pointer()
+                        .text_color(color("foreground"))
+                        .hover(|s| s.bg(color("hover")))
+                        .on_click(cx.listener(|this, _, window, cx| this.close_find(window, cx)))
+                        .child("×"),
+                )
+        });
         div()
             .size_full()
             .flex()
@@ -784,6 +1100,7 @@ impl Render for Browser {
             .text_color(color("foreground"))
             .child(toolbar)
             .when_some(bar, |el, bar| el.child(bar))
+            .when_some(find_bar, |el, find_bar| el.child(find_bar))
             .when_some(self.notice.clone(), |el, message| {
                 el.child(
                     div()
@@ -913,6 +1230,54 @@ mod tests {
         );
         assert_eq!(address("").unwrap(), "about:blank");
     }
+    #[test]
+    fn url_labels_and_display_titles_follow_page_state() {
+        assert_eq!(super::url_label("https://www.google.com/search?q=hi"), "google.com");
+        assert_eq!(super::url_label("https://linear.app/vibes/issue/ORC-1"), "linear.app");
+        assert_eq!(super::url_label("http://localhost:3000/dashboard"), "localhost:3000");
+        assert_eq!(super::url_label("http://127.0.0.1:8080/"), "127.0.0.1:8080");
+        assert_eq!(super::url_label("about:blank"), "Browser");
+        assert_eq!(super::url_label(""), "Browser");
+    }
+
+    #[gpui::test]
+    fn find_bar_opens_tracks_results_and_closes_on_escape(cx: &mut gpui::TestAppContext) {
+        cx.update(gpui_base::init);
+        let (browser, cx) = cx.add_window_view(|window, cx| {
+            super::Browser::new("browser-test", &serde_json::json!({"url": "https://example.com/docs"}), window, cx)
+        });
+        browser.read_with(cx, |browser, _| {
+            assert_eq!(browser.display_title(), "example.com");
+            assert!(!browser.find_open);
+        });
+        browser.update_in(cx, |browser, window, cx| {
+            browser.event(super::Event::Title("Example Docs".into()), window, cx);
+            assert_eq!(browser.display_title(), "Example Docs");
+            browser.open_find(Some("needle"), window, cx);
+            browser.event(
+                super::Event::FindResult {
+                    count: 3,
+                    active: 1,
+                    final_update: true,
+                },
+                window,
+                cx,
+            );
+        });
+        cx.run_until_parked();
+        browser.read_with(cx, |browser, _| {
+            assert!(browser.find_open);
+            assert_eq!(browser.find_query, "needle");
+            assert_eq!(browser.find_matches, Some((1, 3)));
+        });
+        cx.simulate_keystrokes("escape");
+        cx.run_until_parked();
+        browser.read_with(cx, |browser, _| {
+            assert!(!browser.find_open);
+            assert_eq!(browser.find_matches, None);
+        });
+    }
+
     #[test]
     fn does_not_turn_privileged_schemes_into_page_navigation() {
         for input in [

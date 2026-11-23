@@ -171,10 +171,22 @@ function lead(tab, ps) {
   return mine.find((p) => p.program?.agent) ?? mine.find((p) => p.focused) ?? mine[0];
 }
 
+function browserLabel(p) {
+  const title = (p?.title ?? "").trim();
+  if (title && title !== "native-browser" && title !== "Browser") return title;
+  if (p?.url) {
+    try {
+      const u = new URL(p.url);
+      if (u.host) return u.host.replace(/^www\./, "");
+    } catch {}
+  }
+  return "Browser";
+}
+
 // A tab nobody named goes by its program's own title, unless that is only a path or host.
 function tabName(tab, p) {
   if (tab.named) return tab.name;
-  if (p?.mod === "native-browser") return "Browser";
+  if (p?.mod === "native-browser") return browserLabel(p);
   const prog = p?.program;
   const live = (p?.title ?? "").replace(/^[^\p{L}\p{N}]+/u, "").trim();
   const telling = live && live !== prog?.name && live.toLowerCase() !== prog?.key && !/^[~/]/.test(live) && !live.includes("@");
@@ -204,6 +216,8 @@ export default class Spaces extends View {
     this.born = {};
     this.pressed = null;
     this.over = null;
+    this.tabPressed = null;
+    this.tabOver = null;
     this.scroll = ScrollHandle.new(); // the list's position: the active space is brought into view through it
     this.activeAt = -1; // the active space's place among the list's children (headers and rows), -1 when not drawn
     this.machines = [];
@@ -605,11 +619,23 @@ export default class Spaces extends View {
           .when(fromIndex < i, line => line.bottom(0))
           .when(fromIndex > i, line => line.top(0)),
       ))
+      .when(Boolean(this.tabPressed) && this.tabOver?.kind === "space" && this.tabOver.id === w.id && this.tabPressed.space !== w.id, (el) => el.border_1().border_color(t.accent).bg(alpha(t.accent, "20")))
       .on_mouse_down("left", () => {
         this.pressed = w.id;
         this.over = w.id;
       })
       .on_mouse_move((_e, cx) => {
+        if (this.tabPressed) {
+          const source = spaces().find(s => s.id === this.tabPressed.space);
+          const over = source && (source.machine ?? null) === (w.machine ?? null) && this.tabPressed.space !== w.id
+            ? { kind: "space", id: w.id }
+            : null;
+          if (this.tabOver?.kind !== over?.kind || this.tabOver?.id !== over?.id) {
+            this.tabOver = over;
+            cx.notify();
+          }
+          return;
+        }
         const source = spaces().find(s => s.id === this.pressed);
         const over = source && (source.machine ?? null) === (w.machine ?? null) ? w.id : null;
         if (this.pressed !== null && this.over !== over) {
@@ -618,6 +644,17 @@ export default class Spaces extends View {
         }
       })
       .on_mouse_up("left", (_e, cx) => {
+        if (this.tabPressed) {
+          const from = this.tabPressed;
+          const over = this.tabOver;
+          this.tabPressed = null;
+          this.tabOver = null;
+          if (over?.kind === "space" && over.id === w.id && from.space !== w.id) {
+            run("tab.move", { id: from.id, space: w.id });
+          }
+          cx.notify();
+          return;
+        }
         const from = this.pressed;
         const over = this.over;
         this.pressed = null;
@@ -658,10 +695,17 @@ export default class Spaces extends View {
   tabRows(w, t, ps) {
     if (!this.open.has(w.id)) return [];
     const fill = spaceFill(w, t, shared("space.colors") ?? {});
-    return (w.tabs ?? []).filter((tab) => !tab.settled).map((tab) => {
+    const allTabs = w.tabs ?? [];
+    const drag = this.tabPressed;
+    const fromIdx = drag && drag.space === w.id ? allTabs.findIndex((x) => x.id === drag.id) : -1;
+    return allTabs.filter((tab) => !tab.settled).map((tab) => {
       const p = lead(tab, ps);
       const icon = tabIcon(p, t);
       const on = w.active && tab.active;
+      const myIdx = allTabs.findIndex((x) => x.id === tab.id);
+      const isDragged = drag?.id === tab.id && !(this.tabOver?.kind === "tab" && this.tabOver.id === tab.id);
+      const isDropTarget = Boolean(drag) && this.tabOver?.kind === "tab" && this.tabOver.id === tab.id && drag.id !== tab.id;
+      const dropBelow = drag?.space === w.id && fromIdx >= 0 && fromIdx < myIdx;
       return h_flex()
         .id(`space-tab-${tab.id}`)
         .relative()
@@ -677,7 +721,53 @@ export default class Spaces extends View {
         .border_color(on ? t.input : "#00000000")
         .when(on, (el) => el.bg(t.selected).child(div().absolute().left(2).w(2).h(12).rounded_full().bg(fill)))
         .when(!on, (el) => el.hover((s) => s.bg(t.hover)))
-        .on_click(() => run("tab.select", { id: tab.id }))
+        .when(isDragged, (el) => el.opacity(0.5))
+        .when(isDropTarget, (el) => el.child(
+          div().absolute().left(28).right(6).h(2).bg(t.accent)
+            .when(dropBelow, (line) => line.bottom(0))
+            .when(!dropBelow, (line) => line.top(0)),
+        ))
+        .on_mouse_down("left", (_e, cx) => {
+          cx.stop_propagation();
+          this.tabPressed = { id: tab.id, space: w.id };
+          this.tabOver = { kind: "tab", id: tab.id, space: w.id };
+        })
+        .on_mouse_move((_e, cx) => {
+          if (!this.tabPressed) return;
+          const source = spaces().find((s) => s.id === this.tabPressed.space);
+          const over = source && (source.machine ?? null) === (w.machine ?? null)
+            ? { kind: "tab", id: tab.id, space: w.id }
+            : null;
+          if (this.tabOver?.kind !== over?.kind || this.tabOver?.id !== over?.id) {
+            this.tabOver = over;
+            cx.notify();
+          }
+        })
+        .on_mouse_up("left", (_e, cx) => {
+          cx.stop_propagation();
+          const from = this.tabPressed;
+          const over = this.tabOver;
+          this.tabPressed = null;
+          this.tabOver = null;
+          this.pressed = null;
+          this.over = null;
+          if (!from) return;
+          if (from.id === tab.id) {
+            run("tab.select", { id: tab.id });
+          } else if (over?.kind === "tab" && over.id === tab.id) {
+            const current = spaces().find((s) => s.id === w.id);
+            const index = (current?.tabs ?? []).findIndex((x) => x.id === tab.id);
+            if (index !== -1) {
+              if (from.space === w.id) run("tab.move", { id: from.id, index: index + 1 });
+              else run("tab.move", { id: from.id, space: w.id, index: index + 1 });
+            }
+          }
+          cx.notify();
+        })
+        .on_mouse_down("right", (_e, cx) => {
+          cx.stop_propagation();
+          openOverlay({ mod: "menu", kind: "popup", width: 200, props: { tab: "tab", target: { id: tab.id, space: w.id } } });
+        })
         .when(Boolean(icon), (el) => el.child(icon))
         .child(div().flex_1().min_w(0).truncate().text_color(on ? t.foreground : t.muted).when(on, (el) => el.font_weight(500)).child(tabName(tab, p)))
         .when(Boolean(tab.status), (el) => el.child(mark(t, tab.status)));
@@ -741,7 +831,7 @@ export default class Spaces extends View {
       .child(v_flex().flex_1().min_h(0).px(collapsed ? 0 : 8).pb(14).overflow_y_scrollbar().mode("always").track_scroll(this.scroll)
         // A block above (another mod's) growing, or the window resizing, shrinks this list and can push the active space out.
         .on_size_change((_size, cx) => { if (this.activeAt >= 0) { this.scroll.scroll_to_item(this.activeAt); cx.notify(); } })
-        .on_mouse_up("left", (_e, cx) => { this.pressed = null; cx.notify(); })
+        .on_mouse_up("left", (_e, cx) => { this.pressed = null; this.over = null; this.tabPressed = null; this.tabOver = null; cx.notify(); })
         .children(list));
   }
 }

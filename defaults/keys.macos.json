@@ -36,6 +36,7 @@
     "cmd-/": "app.help",
     "cmd-shift-/": "app.help",
     "cmd-b": "layout.toggle:sidebar",
+    "cmd-f": "terminal.search",
     "cmd-alt-b": "browser.open",
     "cmd-ctrl-b": "browser.split:right",
     "cmd-shift-b": "browser.split:right",
@@ -63,7 +64,6 @@
     "ctrl-9": "space.select:9"
   },
   "terminal": {
-    "cmd-f": "terminal.search",
     "cmd-a": "terminal.select_all",
     "cmd-c": "terminal.copy",
     "cmd-v": "terminal.paste",
