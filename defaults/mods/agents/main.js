@@ -72,6 +72,61 @@ function duration(ms) {
   return h < 24 ? `${h}h` : `${Math.floor(h / 24)}d`;
 }
 
+const MARK = { ansi6: "#22a99a", ansi3: "#e3814f", ansi4: "#5b8def", ansi5: "#8b7cf6", ansi2: "#3fae6a", ansi1: "#d9649a" };
+const PROJECT_COLORS = ["ansi6", "ansi3", "ansi4", "ansi5", "ansi2", "ansi1"];
+
+const isClankie = (w) => Boolean(w?.id?.startsWith("clankie-"));
+
+function spaceLabel(w) {
+  const name = w?.name ?? "";
+  if (isClankie(w) && !w.named) {
+    const project = w.id.slice("clankie-".length);
+    if (project && (!name || /^wt-[a-z0-9-]+$/i.test(name) || name === w.id)) return project;
+  }
+  return name;
+}
+
+// Read-only mirror of spaces' color assignment so agent rows and space headers
+// share the exact same color map without mutating shared storage here.
+function resolveSpaceColors(list) {
+  const raw = shared("space.colors");
+  const stored = raw && typeof raw === "object" && !Array.isArray(raw) ? raw : {};
+  const ids = new Set(list.map((p) => p?.id).filter(Boolean));
+  const kept = Object.fromEntries(Object.entries(stored).filter(([id]) => ids.has(id)));
+  for (const p of list) {
+    if (!p?.id || kept[p.id] || p.name === "~") continue;
+    const uses = (c) => Object.values(kept).filter((v) => v === c).length;
+    kept[p.id] = PROJECT_COLORS.reduce((best, c) => (uses(c) < uses(best) ? c : best));
+  }
+  return kept;
+}
+
+function spaceFill(w, t, colors) {
+  if (!w) return null;
+  const stored = colors?.[w.id];
+  if (stored) return stored.startsWith("#") ? stored : (MARK[stored] ?? t[stored]);
+  if (w.name === "~") return t.dim;
+  return MARK[PROJECT_COLORS[0]] ?? t[PROJECT_COLORS[0]];
+}
+
+function spaceMark(w, fill, small = false) {
+  if (!fill) return null;
+  if (isClankie(w)) {
+    const ring = small ? 9 : 11;
+    const core = small ? 3 : 4;
+    return h_flex()
+      .size(ring)
+      .flex_none()
+      .rounded_full()
+      .border(1.5)
+      .border_color(fill)
+      .items_center()
+      .justify_center()
+      .child(div().size(core).rounded_full().bg(fill));
+  }
+  return div().size(small ? 6 : 7).flex_none().rounded_full().bg(fill);
+}
+
 // The agent's icon from the app's program table: a one-color glyph or a picture.
 function icon(p, size, color) {
   if (!p?.icon) return null;
@@ -279,9 +334,16 @@ export default class Agents extends View {
     // A row reads "space \u00b7 detail": the detail is a tab someone named or the
     // agent's own title, never an automatic tab number unless two rows would
     // otherwise read the same.
-    // Read the pane snapshot once: every host read copies the whole list into JS.
+    // Read the pane and space snapshots once: every host read copies the whole list into JS.
     const leads = leadPanes(panes());
-    const tabs = new Map(spaces().flatMap(s => s.tabs).map(tab => [tab.id, tab]));
+    const spaceList = spaces();
+    const spaceById = new Map(spaceList.filter(s => s?.id).map(s => [s.id, s]));
+    const spColors = resolveSpaceColors(spaceList);
+    const spaceNameOf = (a) => {
+      const sp = spaceById.get(a.space);
+      return (sp ? spaceLabel(sp) : "") || a.space_name || "";
+    };
+    const tabs = new Map(spaceList.flatMap(s => s.tabs ?? []).map(tab => [tab.id, tab]));
     const labels = new Map(list.map(a => {
       const tab = tabs.get(a.tab);
       const many = tabCounts.get(a.tab) > 1;
@@ -290,17 +352,21 @@ export default class Agents extends View {
     const label = (a) => labels.get(a.address);
     const detail = new Map(list.map(a => [a.address, /^\d+$/.test(label(a)) ? null : label(a)]));
     const seen = {};
-    for (const a of list) { const k = `${a.space_name}\u0000${detail.get(a.address) ?? ""}`; seen[k] = (seen[k] ?? 0) + 1; }
+    for (const a of list) { const k = `${spaceNameOf(a)}\u0000${detail.get(a.address) ?? ""}`; seen[k] = (seen[k] ?? 0) + 1; }
     for (const a of list) {
-      if (detail.get(a.address) == null && seen[`${a.space_name}\u0000`] > 1) detail.set(a.address, label(a));
+      if (detail.get(a.address) == null && seen[`${spaceNameOf(a)}\u0000`] > 1) detail.set(a.address, label(a));
     }
 
     const row = (a, i, subs = []) => {
       const pic = icon(a.program, 16, t.foreground);
       const more = detail.get(a.address);
+      const sp = spaceById.get(a.space);
+      const spName = spaceNameOf(a);
+      const spFill = spaceFill(sp, t, spColors);
       // An agent on another machine (`vps/t7`) says which.
       const machine = a.address.includes("/") ? a.address.split("/")[0] : null;
       if (collapsed) {
+        const tip = [spName, more || a.program?.name, a.status].filter(Boolean).join(" · ");
         return h_flex()
           .id(`ag-${a.address}`)
           .h(26)
@@ -308,8 +374,10 @@ export default class Agents extends View {
           .flex_none()
           .items_center()
           .gap(4)
+          .tooltip(tip)
           .hover((s) => s.bg(t.hover))
           .on_click(() => run("pane.focus", { pane: a.pane }))
+          .when(Boolean(spFill), (el) => el.child(div().size(5).flex_none().rounded_full().bg(spFill)))
           .child(div().flex_1().min_w(0).whitespace_nowrap().text_right().text_color(t.muted).child(String(i + 1)))
           .child(h_flex().w(14).flex_none().items_center().justify_center().child(this.status(t, a, true)));
       }
@@ -336,7 +404,8 @@ export default class Agents extends View {
       // Under a space header the space goes without saying; an automatic tab number says nothing.
       // Without a space header above (priority, pinned) the row names its space.
       const full = byPriority || isPinned;
-      const name = full ? a.space_name || label(a) : more ?? (/^\d+$/.test(label(a)) ? a.program?.name || label(a) : label(a));
+      const name = full ? spName || label(a) : more ?? (/^\d+$/.test(label(a)) ? a.program?.name || label(a) : label(a));
+      const dot = full ? spaceMark(sp, spFill, true) : null;
       return h_flex()
         .id(`ag-${a.address}`)
         .px(8)
@@ -361,6 +430,7 @@ export default class Agents extends View {
             cx.notify();
           })).child(pic)))
         .child(h_flex().flex_1().min_w(0).gap(5).items_center()
+          .when(Boolean(dot), (el) => el.child(dot))
           .child(div().min_w(0).max_w(full && more ? 120 : 200).truncate().text_color(idle ? t.muted : t.foreground).child(name))
           .when(full && Boolean(more), el => el.child(div().flex_1().min_w(0).truncate().text_color(t.dim).child(`\u00b7 ${more}`))))
         .when(Boolean(machine), el => el.child(div().text_size(10).text_color(t.dim).child(machine)))
@@ -372,18 +442,19 @@ export default class Agents extends View {
 
     // Groups in list order: spaces (grouped) or priority sections. Agents of a
     // space are next to each other in agents(), so neighbours make a group.
-    const groups = pinned.length ? [{ id: "pinned", label: "Pinned", status: null, members: pinned }] : [];
+    const groups = pinned.length ? [{ id: "pinned", label: "Pinned", status: null, space: null, members: pinned }] : [];
     for (const a of rest) {
       const r = rankOf(a) || RANK.idle;
       const id = byPriority ? `sec-${r}` : `sp-${a.space}`;
       if (groups.at(-1)?.id === id) groups.at(-1).members.push(a);
-      else groups.push({ id, label: byPriority ? SECTION[r] : a.space_name || "", status: byPriority ? SECTION_STATUS[r] : null, members: [a] });
+      else groups.push({ id, label: byPriority ? SECTION[r] : spaceNameOf(a), status: byPriority ? SECTION_STATUS[r] : null, space: byPriority ? null : (spaceById.get(a.space) ?? null), members: [a] });
     }
 
     // A group's header; it folds the group. Folded, it says how many and the most urgent state.
     const header = (g) => {
       const open = !this.folded.has(g.id);
       const top = g.members.reduce((m, a) => ((RANK[a.status] ?? 0) > (RANK[m] ?? 0) ? a.status : m), null);
+      const dot = g.space ? spaceMark(g.space, spaceFill(g.space, t, spColors)) : null;
       return h_flex()
         .id(g.id)
         .px(8)
@@ -400,6 +471,7 @@ export default class Agents extends View {
           open ? this.folded.add(g.id) : this.folded.delete(g.id);
           cx.notify();
         })
+        .when(Boolean(dot), (el) => el.child(dot))
         .child(div().truncate().text_color(t[g.status] ?? t.dim).child(g.label))
         .when(byPriority || !open, (el) => el.child(div().text_color(t.dim).child(String(g.members.length))))
         .child(div().flex_1())

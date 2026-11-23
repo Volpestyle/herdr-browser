@@ -21,6 +21,26 @@ async function checkout(folder, on) {
   return common.stdout.trim() === `${top.stdout.trim()}/.git` ? "main" : "linked";
 }
 
+// Space dot color choices: first six store theme keys matching spaces/picker,
+// the extra two store direct hex colors.
+const SWATCHES = [
+  ["ansi6", "#22a99a", "Teal"],
+  ["ansi3", "#e3814f", "Orange"],
+  ["ansi4", "#5b8def", "Blue"],
+  ["ansi5", "#8b7cf6", "Violet"],
+  ["ansi2", "#3fae6a", "Green"],
+  ["ansi1", "#d9649a", "Rose"],
+  ["#e5b95c", "#e5b95c", "Amber"],
+  ["#9aa3b2", "#9aa3b2", "Slate"],
+];
+
+function setSpaceColor(id, value) {
+  const prev = shared("space.colors");
+  const next = prev && typeof prev === "object" && !Array.isArray(prev) ? { ...prev } : {};
+  next[id] = value;
+  setShared("space.colors", next);
+}
+
 // Pinned tabs come first in their space and show a pin icon with a compact label in the tab strip (shared "tabs.pinned": tab ids).
 function pin({ id, space }) {
   const was = shared("tabs.pinned") ?? [];
@@ -129,7 +149,46 @@ export default class Menu extends View {
 
   render(cx) {
     const t = theme();
-    const list = items(props(), this.git);
+    const p = props();
+    const list = items(p, this.git);
+    const spaceId = p?.tab === "space" ? p.target?.id : null;
+    const rawColors = shared("space.colors");
+    const currentColor = spaceId && rawColors && typeof rawColors === "object" ? rawColors[spaceId] : null;
+    const colorRow = spaceId
+      ? v_flex()
+          .child(div().mx(7).my(4).h(1).bg(t.border))
+          .child(
+            h_flex()
+              .id("mi-space-colors")
+              .px(8)
+              .py(5)
+              .gap(5)
+              .items_center()
+              .justify_between()
+              .children(
+                SWATCHES.map(([key, hex, label]) => {
+                  const active = currentColor === key || currentColor === hex;
+                  return h_flex()
+                    .id(`mi-color-${label.toLowerCase()}`)
+                    .size(18)
+                    .flex_none()
+                    .rounded_full()
+                    .items_center()
+                    .justify_center()
+                    .cursor_pointer()
+                    .tooltip(label)
+                    .when(active, (el) => el.border(1.5).border_color(t.foreground))
+                    .when(!active, (el) => el.hover((s) => s.bg(t.hover)))
+                    .on_click(() => {
+                      setSpaceColor(spaceId, key);
+                      closeOverlay(p?.overlay);
+                    })
+                    .child(div().size(12).rounded_full().bg(hex));
+                }),
+              ),
+          )
+      : null;
+    const closeIndex = spaceId ? list.findIndex((it) => it[1] === "space.close") : -1;
     return v_flex()
       .id("menu")
       .track_focus(this.handle)
@@ -149,6 +208,7 @@ export default class Menu extends View {
       .children(
         list.map((it, i) =>
           v_flex()
+            .when(i === closeIndex && Boolean(colorRow), (el) => el.child(colorRow))
             .when(i > 0 && (it[1].endsWith(".close") || it[1] === "app.help" || (it[1] === "app.theme" && list[i - 1][1] !== "app.theme")), el => el.child(div().mx(7).my(4).h(1).bg(t.border)))
             .child(h_flex()
             .id(`mi-${i}`)

@@ -1241,3 +1241,34 @@ fn status_bar_shows_the_real_palette_key(cx: &mut TestAppContext) {
     assert!(tree.contains("commands"), "unbound hint still offers commands: {tree}");
     assert!(!tree.contains("Shift P"), "unbound hint must not invent a key: {tree}");
 }
+
+#[gpui::test]
+fn space_icons_use_colored_dots_tooltips_and_clankie_marks(cx: &mut TestAppContext) {
+    cx.update(gpui_shell::init);
+    let staged = Staged::new();
+    let mut values = fixture(true, props(), updates("current", "current"));
+    values.insert("spaces".into(), json!([
+        {"id":"s1","index":1,"name":"~","named":false,"folder":"/Users/james","machine":null,"branch":null,"active":true,"status":"idle","tabs":[]},
+        {"id":"clankie-core","index":2,"name":"wt-kira-1bb4b2","named":false,"folder":"/Users/james/clankie-v2/core/.local/wt-kira-1bb4b2","machine":null,"branch":"feat/x","active":false,"status":"working","tabs":[{"id":"t1","index":1,"name":"kira","named":true,"active":true,"status":"working","panes":1,"zoomed":false,"settled":false,"settled_at":null,"changed_at":null,"working_since":null}]}
+    ]));
+    // Expanded sidebar: clean project slug, hover tooltip, no monogram letter.
+    let expanded = describe_with_values(cx, &staged, "mods/spaces", values.clone(), None).unwrap();
+    assert!(expanded.contains("text \"core\""), "Clankie worktree space should show its project slug: {expanded}");
+    assert!(!expanded.contains("text \"wt-kira-1bb4b2\""), "raw worktree hash should not be the row label: {expanded}");
+    assert!(!expanded.contains("text \"W\""), "letter monogram should be gone: {expanded}");
+    assert!(expanded.contains(":tooltip[Str(\"core (Clankie)"), "expanded Clankie row needs hover tooltip: {expanded}");
+
+    // Collapsed rail: colored marks with hover tooltips instead of bare numbers.
+    values.insert("layout".into(), json!({"id":"root","children":[{"id":"sidebar","size":{"px":76}}]}));
+    let collapsed = describe_with_values(cx, &staged, "mods/spaces", values, None).unwrap();
+    assert!(collapsed.contains(":tooltip[Str(\"core (Clankie)"), "collapsed rail needs hover tooltip: {collapsed}");
+    assert!(!collapsed.contains("text \"2\""), "collapsed rail should show colored dots instead of numbers: {collapsed}");
+
+    // Space context menu exposes color swatches.
+    let mut menu_props = props();
+    menu_props.as_object_mut().unwrap().insert("tab".into(), json!("space"));
+    menu_props.as_object_mut().unwrap().insert("target".into(), json!({"id":"clankie-core"}));
+    let menu = describe(cx, &staged, "mods/menu", false, menu_props, updates("current", "current"), None).unwrap();
+    assert!(menu.contains("mi-space-colors"), "space menu should render color swatches: {menu}");
+    assert!(menu.contains("mi-color-teal") && menu.contains("mi-color-slate"), "all swatch colors should render: {menu}");
+}

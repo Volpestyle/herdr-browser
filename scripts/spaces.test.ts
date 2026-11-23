@@ -546,3 +546,40 @@ test("the list reveals the active space again when a machine header shifts its p
   h.view.render();
   expect(h.view.scroll.calls).toEqual([1, 2]);
 });
+
+test("Clankie worktree auto-names display their project slug unless manually renamed", () => {
+  const spaceLabel = new Function("View", `${source}; return spaceLabel;`)(class {});
+  expect(spaceLabel({ id: "clankie-core", name: "wt-kira-1bb4b2", named: false })).toBe("core");
+  expect(spaceLabel({ id: "clankie-mmo-flow", name: "mmo-flow", named: false })).toBe("mmo-flow");
+  expect(spaceLabel({ id: "clankie-app", name: "clankie-app", named: false })).toBe("app");
+  expect(spaceLabel({ id: "clankie-app", name: "iOS Beta", named: true })).toBe("iOS Beta");
+  expect(spaceLabel({ id: "sp123", name: "wt-manual", named: false })).toBe("wt-manual");
+});
+
+test("space tooltips summarize Clankie spaces, git context, tab status, and shortcuts", () => {
+  const spaceTooltip = new Function("View", `${source}; return spaceTooltip;`)(class {});
+  const tip = spaceTooltip(
+    {
+      id: "clankie-core",
+      name: "wt-kira-1bb4b2",
+      named: false,
+      folder: "/Users/james/clankie-v2/core/.local/wt-kira-1bb4b2",
+      tabs: [
+        { id: "t1", status: "working", settled: false },
+        { id: "t2", status: "blocked", settled: false },
+        { id: "t3", status: "idle", settled: false },
+        { id: "t4", status: "done", settled: true },
+      ],
+    },
+    2,
+    { name: "core", branch: "feat/fleet" },
+    "macos",
+  );
+  expect(tip).toBe("core (Clankie) · feat/fleet · 3 tabs · 1 needs you, 1 working · ⌃3");
+
+  const linuxTip = spaceTooltip({ id: "sp1", name: "~", folder: "/home/u", tabs: [] }, 0, null, "linux");
+  expect(linuxTip).toBe("~ · Ctrl+1");
+
+  const tenth = spaceTooltip({ id: "sp10", name: "notes", folder: "/home/u/notes", tabs: [] }, 9, null, "macos");
+  expect(tenth).toBe("notes · u/notes");
+});

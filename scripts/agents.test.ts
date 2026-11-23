@@ -286,3 +286,23 @@ test("a title that opens with a bracket keeps it; each agent's own prefix still 
   ];
   for (const [raw, shown] of titles) expect(clean(raw)).toBe(shown);
 });
+
+for (const sort of ["priority", "grouped"]) test(`${sort}: Clankie spaces show their project slug instead of worktree hashes`, () => {
+  const program = { name: "Grok", key: "grok", agent: true };
+  const list = [{ address: "t1", pane: "p1", tab: "tab1", space: "clankie-core", space_name: "wt-kira-1bb4b2", program, title: "Fix auth", status: "working", seq: 1 }];
+  const { agents } = harness([], {
+    agents: () => list,
+    terminals: () => [{ address: "t1", parent: null, state: "live", status: "working", program, labels: {} }],
+    panes: () => [{ tab: "tab1", terminal: "t1", program, title: "Fix auth" }],
+    focused: () => null,
+    spaces: () => [{ id: "clankie-core", name: "wt-kira-1bb4b2", named: false, tabs: [{ id: "tab1", name: "1", named: false }] }],
+    layout: () => ({ id: "sidebar", size: { px: 268 } }),
+    shared: (k: string) => (k === "space.colors" ? { "clankie-core": "ansi3" } : sort),
+    theme: () => ({}),
+    setAgentOrder() {},
+    div: element, v_flex: element, h_flex: element, svg: element, image: element,
+  });
+  const text = textOf(agents.render({}).node);
+  expect(text).toContain("core");
+  expect(text).not.toContain("wt-kira-1bb4b2");
+});

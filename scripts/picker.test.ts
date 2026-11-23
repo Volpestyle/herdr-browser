@@ -189,3 +189,23 @@ test("picker preserves small pixel touchpad deltas", () => {
     expect(view.scroll).toBe(-delta);
   }
 });
+
+test("picker matches and labels Clankie worktree spaces by their project slug", () => {
+  const view = picker(0);
+  testSpaces = [
+    { id: "clankie-core", name: "wt-kira-1bb4b2", named: false, status: "working", tabs: [{ id: "c-tab", name: "kira" }] },
+  ];
+  view.input.value = () => "core";
+  view.input.handlers.change({}, cx);
+  const tree = view.render();
+  expect(find(tree, "pk-c-tab")).toBeDefined();
+  const texts: string[] = [];
+  const walk = (n: any) => {
+    if (typeof n === "string") texts.push(n);
+    else if (n?.nodes) n.nodes.forEach(walk);
+  };
+  walk(tree);
+  expect(texts).toContain("core");
+  expect(texts).toContain("Clankie");
+  expect(texts).not.toContain("W");
+});

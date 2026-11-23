@@ -10,6 +10,23 @@ import { agents, spaces, terminals, run, hc, theme, settings, props, closeOverla
 
 const MARK = { ansi6: "#22a99a", ansi3: "#e3814f", ansi4: "#5b8def", ansi5: "#8b7cf6", ansi2: "#3fae6a", ansi1: "#d9649a" };
 
+function alpha(color, aa) {
+  if (typeof color !== "string" || !color.startsWith("#")) return color;
+  const base = color.length === 9 ? color.slice(0, 7) : color;
+  return base.length === 7 ? base + aa : color;
+}
+
+const isClankie = (w) => Boolean(w?.id?.startsWith("clankie-"));
+
+function spaceLabel(w) {
+  const name = w?.name ?? "";
+  if (isClankie(w) && !w.named) {
+    const project = w.id.slice("clankie-".length);
+    if (project && (!name || /^wt-[a-z0-9-]+$/i.test(name) || name === w.id)) return project;
+  }
+  return name;
+}
+
 // Space colors, kept by space id in shared "space.colors": a theme
 // color name ("ansi6") or a picked #rrggbb. A space seen without one gets
 // the theme color fewest spaces use, once; every mod does the same in the
@@ -29,9 +46,35 @@ function spaceColors() {
   return kept;
 }
 function spaceColor(t, p) {
+  const stored = spaceColors()[p.id];
+  if (stored) return stored.startsWith("#") ? stored : (MARK[stored] ?? t[stored]);
   if (p.name === "~") return t.dim;
-  const c = spaceColors()[p.id] ?? PROJECT_COLORS[0];
-  return c.startsWith("#") ? c : (MARK[c] ?? t[c]);
+  return MARK[PROJECT_COLORS[0]] ?? t[PROJECT_COLORS[0]];
+}
+function spaceMark(w, fill) {
+  if (isClankie(w)) {
+    return h_flex()
+      .size(14)
+      .flex_none()
+      .items_center()
+      .justify_center()
+      .child(
+        h_flex()
+          .size(12)
+          .rounded_full()
+          .border(1.5)
+          .border_color(fill)
+          .items_center()
+          .justify_center()
+          .child(div().size(4).rounded_full().bg(fill)),
+      );
+  }
+  return h_flex()
+    .size(14)
+    .flex_none()
+    .items_center()
+    .justify_center()
+    .child(div().size(8).rounded_full().bg(fill));
 }
 
 export default class Picker extends View {
@@ -80,7 +123,7 @@ export default class Picker extends View {
           const mine = all.filter((a) => a.tab === ctx.id);
           return { w, ctx, mine, team: teamOf(mine.map((a) => a.address)) };
         })
-        .filter((c) => !f || [w.name, c.ctx.name, ...c.mine.map((a) => a.program?.name ?? "")].join(" ").toLowerCase().includes(f));
+        .filter((c) => !f || [w.name, spaceLabel(w), w.id, c.ctx.name, ...c.mine.map((a) => a.program?.name ?? "")].join(" ").toLowerCase().includes(f));
       return { w, ctxs };
     });
     const busy = groups.filter((p) => p.w.status && p.ctxs.length);
@@ -155,17 +198,19 @@ export default class Picker extends View {
 
     const row = (r) => {
       if (r.kind === "head") {
+        const fill = spaceColor(t, r.w);
         return h_flex()
           .px(10)
           .pt(10)
           .pb(3)
-          .gap(8)
+          .gap(7)
           .items_center()
           .text_size(11)
           .font_semibold()
           .text_color(t.dim)
-          .child(h_flex().size(18).rounded(5).bg(spaceColor(t, r.w)).items_center().justify_center().text_size(10.5).font_bold().text_color("#ffffff").child([...r.w.name][0]?.toUpperCase() ?? "?"))
-          .child(r.w.name);
+          .child(spaceMark(r.w, fill))
+          .child(spaceLabel(r.w))
+          .when(isClankie(r.w), (el) => el.child(div().px(5).py(1).rounded(4).bg(alpha(fill, "20")).text_size(10).font_medium().text_color(fill).child("Clankie")));
       }
       if (r.kind === "earlier") {
         return h_flex()

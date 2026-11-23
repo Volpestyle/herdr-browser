@@ -1,8 +1,8 @@
-// Workspace spaces: stable colored avatars, worktrees under their checkout,
-// grouped by machine when more than one is known. After a space's name, the repo
-// its first terminal is in now, only where unusual: branch, ahead/behind. Its chevron
-// opens it to list its tabs with each one's agent state. Click to
-// switch, right-click for its menu, drag to reorder.
+// Workspace spaces: color-coded dots (ringed beacon for Clankie fleets),
+// worktrees under their checkout, grouped by machine when more than one is known.
+// After a space's name, the repo its first terminal is in now, only where unusual:
+// branch, ahead/behind. Its chevron opens it to list its tabs with each one's
+// agent state. Click to switch, right-click for its menu and color, drag to reorder.
 
 import { View, div, svg, image } from "gpui-kit";
 import { v_flex, h_flex, ScrollHandle } from "gpui-base";
@@ -50,9 +50,104 @@ async function both(a, b) {
   return done.map((d) => d.value);
 }
 
-// What a stored color name looks like on an avatar (the same in every mod
-// that draws space avatars): one strong color per hue, light and dark alike.
+// What a stored color name looks like on a space dot (the same in every mod
+// that draws space marks): one strong color per hue, light and dark alike.
 const MARK = { ansi6: "#22a99a", ansi3: "#e3814f", ansi4: "#5b8def", ansi5: "#8b7cf6", ansi2: "#3fae6a", ansi1: "#d9649a" };
+
+function alpha(color, aa) {
+  if (typeof color !== "string" || !color.startsWith("#")) return color;
+  const base = color.length === 9 ? color.slice(0, 7) : color;
+  return base.length === 7 ? base + aa : color;
+}
+
+const isClankie = (w) => Boolean(w?.id?.startsWith("clankie-"));
+
+// Clankie spaces carry id "clankie-<project>"; when unnamed and auto-named from
+// a worker worktree ("wt-nora-89605b"), show the clean project name instead.
+export function spaceLabel(w) {
+  const name = w?.name ?? "";
+  if (isClankie(w) && !w.named) {
+    const project = w.id.slice("clankie-".length);
+    if (project && (!name || /^wt-[a-z0-9-]+$/i.test(name) || name === w.id)) return project;
+  }
+  return name;
+}
+
+function spaceFill(w, t, colors) {
+  const stored = colors?.[w?.id];
+  if (stored) return stored.startsWith("#") ? stored : (MARK[stored] ?? t[stored]);
+  if (w?.name === "~") return t.dim;
+  return MARK.ansi6 ?? t.ansi6;
+}
+
+// Regular spaces get a clean colored dot (with a soft halo when active);
+// Clankie fleet spaces get a concentric colored ring + core beacon.
+function spaceMark(w, fill, { active = false, compact = false } = {}) {
+  const slot = compact ? 16 : 16;
+  const dot = compact ? 10 : 8;
+  if (isClankie(w)) {
+    const ring = compact ? 14 : 13;
+    return h_flex()
+      .size(slot)
+      .flex_none()
+      .items_center()
+      .justify_center()
+      .child(
+        h_flex()
+          .size(ring)
+          .rounded_full()
+          .border(1.5)
+          .border_color(fill)
+          .when(active, (el) => el.bg(alpha(fill, "2b")))
+          .items_center()
+          .justify_center()
+          .child(div().size(5).rounded_full().bg(fill)),
+      );
+  }
+  return h_flex()
+    .size(slot)
+    .flex_none()
+    .items_center()
+    .justify_center()
+    .child(
+      h_flex()
+        .size(active ? (compact ? 16 : 14) : dot)
+        .rounded_full()
+        .when(active, (el) => el.bg(alpha(fill, "2b")))
+        .items_center()
+        .justify_center()
+        .child(div().size(dot).rounded_full().bg(fill)),
+    );
+}
+
+// Concise single-line tooltip for hover in both expanded and collapsed rail modes.
+export function spaceTooltip(w, i, g, platform) {
+  const label = spaceLabel(w) || w?.id || "Space";
+  const parts = [isClankie(w) ? `${label} (Clankie)` : label];
+  if (g) {
+    const repo = g.name && g.name.toLowerCase() !== label.toLowerCase() ? g.name : "";
+    const branch = g.branch && g.branch !== "main" && g.branch !== "master" && g.branch.toLowerCase() !== label.toLowerCase() ? g.branch : "";
+    const gitPart = [repo, branch].filter(Boolean).join(" / ");
+    if (gitPart) parts.push(gitPart);
+  } else if (w?.folder && w.name !== "~") {
+    const tail = w.folder.replace(/\/+$/, "").split("/").slice(-2).join("/");
+    if (tail && tail !== label) parts.push(tail);
+  }
+  const tabs = (w?.tabs ?? []).filter((tab) => !tab.settled);
+  if (tabs.length) {
+    parts.push(`${tabs.length} ${tabs.length === 1 ? "tab" : "tabs"}`);
+    const counts = { blocked: 0, working: 0, done: 0 };
+    for (const tab of tabs) if (tab.status in counts) counts[tab.status]++;
+    const status = [
+      counts.blocked ? `${counts.blocked} needs you` : "",
+      counts.working ? `${counts.working} working` : "",
+      counts.done ? `${counts.done} done` : "",
+    ].filter(Boolean);
+    if (status.length) parts.push(status.join(", "));
+  }
+  if (i >= 0 && i < 9) parts.push(platform === "macos" ? `⌃${i + 1}` : `Ctrl+${i + 1}`);
+  return parts.join(" · ");
+}
 
 // A space speaks up only when something in it needs you.
 export function glyph(status) {
@@ -319,7 +414,7 @@ export default class Spaces extends View {
 
   menu(w) {
     // A popup is as tall as its items; height is only the most.
-    openOverlay({ mod: "menu", kind: "popup", width: 200, height: 260, props: { tab: "space", target: { id: w.id } } });
+    openOverlay({ mod: "menu", kind: "popup", width: 216, height: 290, props: { tab: "space", target: { id: w.id } } });
   }
 
   orderingDue(now) {
@@ -490,8 +585,9 @@ export default class Spaces extends View {
     const open = this.open.has(w.id);
     const fromIndex = this.pressed === null ? -1 : spaces().findIndex(s => s.id === this.pressed);
     const colors = shared("space.colors") ?? {};
-    const color = colors[w.id] ?? "ansi6";
-    const fill = color.startsWith("#") ? color : (MARK[color] ?? t[color]);
+    const fill = spaceFill(w, t, colors);
+    const label = spaceLabel(w);
+    const tip = spaceTooltip(w, i, g, window()?.platform);
     return v_flex()
       .relative()
       .id(`space-${w.id}`)
@@ -500,6 +596,7 @@ export default class Spaces extends View {
       .flex_none()
       .justify_center()
       .rounded(8)
+      .tooltip(tip)
       .when(on, (el) => el.bg(t.selected))
       .when(!on, (el) => el.hover((s) => s.bg(t.hover)))
       .when(this.pressed === w.id && this.over !== w.id, (el) => el.opacity(0.5))
@@ -537,9 +634,9 @@ export default class Spaces extends View {
           .gap(9)
           .items_center()
           .when(Boolean(tree), el => el.pl(22).child(svg("mods/workspace-chrome/branch.svg").size(13).flex_none().text_color(t.dim)))
-          .when(!tree, el => el.child(h_flex().size(18).flex_none().rounded(5).bg(fill).items_center().justify_center().text_size(10.5).font_bold().text_color("#ffffff").child([...w.name][0]?.toUpperCase() ?? "?")))
-          .child(div().flex_initial().min_w(SIDE_MIN).truncate().text_color(t.foreground).child(w.name))
-          .child(g ? this.gitTail(g, tree, w.name, t) : div().flex_1())
+          .when(!tree, el => el.child(spaceMark(w, fill, { active: on })))
+          .child(div().flex_initial().min_w(SIDE_MIN).truncate().text_color(t.foreground).child(label))
+          .child(g ? this.gitTail(g, tree, label, t) : div().flex_1())
           .when(!open && (w.status === "blocked" || w.status === "done"), (el) => el.child(mark(t, w.status)))
           .when(w.tabs?.length > 0, (el) => el.child(div()
             .id(`space-open-${w.id}`)
@@ -583,20 +680,29 @@ export default class Spaces extends View {
     });
   }
 
-  compact({ w, i }, t) {
+  compact({ w, i, g, tree }, t) {
+    const colors = shared("space.colors") ?? {};
+    const fill = spaceFill(w, t, colors);
+    const tip = spaceTooltip(w, i, g, window()?.platform);
+    const alert = w.status === "blocked" || w.status === "done";
     return railCell(h_flex()
       .id(`space-${w.id}`)
       .relative()
       .w(RAIL_CELL)
-      .h(26)
-      .rounded(6)
+      .h(28)
+      .rounded(7)
       .justify_center()
       .items_center()
-      .when(w.active, (el) => el.bg(t.selected))
+      .cursor_pointer()
+      .tooltip(tip)
+      .when(w.active, (el) => el.bg(t.selected).child(div().absolute().left(1).w(2).h(14).rounded_full().bg(fill)))
       .when(!w.active, (el) => el.hover((s) => s.bg(t.hover)))
       .on_click(() => run("space.select", { id: w.id }))
-      .child(div().text_color(w.active ? t.foreground : t.muted).child(String(i + 1)))
-      .child(div().absolute().right(5).text_color(tone(t, w.status)).child(glyph(w.status))));
+      .on_mouse_down("right", () => this.menu(w))
+      .when(Boolean(tree), (el) => el.child(svg("mods/workspace-chrome/branch.svg").size(12).flex_none().text_color(w.active ? t.foreground : t.dim)))
+      .when(!tree, (el) => el.child(spaceMark(w, fill, { active: w.active, compact: true })))
+      .when(alert, (el) => el.child(div().absolute().top(4).right(4).size(7).rounded_full().border_1().border_color(t.chrome).bg(tone(t, w.status))))
+      .when(w.status === "working", (el) => el.child(div().absolute().top(3).right(3).child(svg("mods/workspace-chrome/spinner.svg").size(9).text_color(t.working).spin(900)))));
   }
 
   render() {
