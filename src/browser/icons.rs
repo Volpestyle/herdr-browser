@@ -1,6 +1,172 @@
 pub const DEFAULT_ICON: &str = "mods/native-browser/browser.svg";
 const MARKDOWN_ICON: &str = "mods/native-browser/sites/markdown.svg";
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct SiteIcon {
+    pub path: &'static str,
+    pub tint: bool,
+    pub color: Option<&'static str>,
+}
+
+const DEFAULT: SiteIcon = SiteIcon {
+    path: DEFAULT_ICON,
+    tint: true,
+    color: None,
+};
+
+const ICON_STYLES: &[(&str, bool, Option<&str>)] = &[
+    ("mods/native-browser/sites/1password.svg", true, Some("#3B82F6")),
+    ("mods/native-browser/sites/airtable.svg", false, None),
+    ("mods/native-browser/sites/algolia.svg", true, Some("#295CFF")),
+    ("mods/native-browser/sites/amazon.svg", true, Some("#FFA929")),
+    ("mods/native-browser/sites/amazonaws.svg", true, Some("#FF9900")),
+    ("mods/native-browser/sites/anthropic.svg", true, None),
+    ("mods/native-browser/sites/apple.svg", true, None),
+    ("mods/native-browser/sites/argo.svg", false, None),
+    ("mods/native-browser/sites/asana.svg", true, Some("#F06A6A")),
+    ("mods/native-browser/sites/atlassian.svg", false, None),
+    ("mods/native-browser/sites/auth0.svg", true, Some("#ED663B")),
+    ("mods/native-browser/sites/basecamp.svg", true, Some("#59C173")),
+    ("mods/native-browser/sites/bitbucket.svg", false, None),
+    ("mods/native-browser/sites/bluesky.svg", true, Some("#2A92FE")),
+    ("mods/native-browser/sites/box.svg", true, Some("#298AFF")),
+    ("mods/native-browser/sites/brex.svg", true, Some("#F46A25")),
+    ("mods/native-browser/sites/buildkite.svg", true, Some("#3CECA3")),
+    ("mods/native-browser/sites/calendly.svg", true, Some("#2983FF")),
+    ("mods/native-browser/sites/canva.svg", true, Some("#29F7FF")),
+    ("mods/native-browser/sites/chromatic.svg", false, None),
+    ("mods/native-browser/sites/circleci.svg", true, Some("#78B844")),
+    ("mods/native-browser/sites/claude.svg", true, Some("#D97757")),
+    ("mods/native-browser/sites/clerk.svg", true, Some("#6C47FF")),
+    ("mods/native-browser/sites/clickup.svg", false, None),
+    ("mods/native-browser/sites/cloudflare.svg", false, None),
+    ("mods/native-browser/sites/coda.svg", true, Some("#F46A54")),
+    ("mods/native-browser/sites/codeberg.svg", true, Some("#2185D0")),
+    ("mods/native-browser/sites/codesandbox.svg", true, None),
+    ("mods/native-browser/sites/confluence.svg", false, None),
+    ("mods/native-browser/sites/cursor.svg", true, None),
+    ("mods/native-browser/sites/databricks.svg", true, Some("#FF3621")),
+    ("mods/native-browser/sites/datadog.svg", true, Some("#9B6BFF")),
+    ("mods/native-browser/sites/deepseek.svg", true, Some("#5786FE")),
+    ("mods/native-browser/sites/diagramsdotnet.svg", true, Some("#FB9F2D")),
+    ("mods/native-browser/sites/digitalocean.svg", true, Some("#2994FF")),
+    ("mods/native-browser/sites/discord.svg", true, Some("#5865F2")),
+    ("mods/native-browser/sites/docker.svg", true, Some("#39A0EF")),
+    ("mods/native-browser/sites/docusign.svg", true, Some("#FFCE00")),
+    ("mods/native-browser/sites/dribbble.svg", false, None),
+    ("mods/native-browser/sites/dropbox.svg", true, Some("#297AFF")),
+    ("mods/native-browser/sites/duckduckgo.svg", false, None),
+    ("mods/native-browser/sites/elastic.svg", true, Some("#29CAFF")),
+    ("mods/native-browser/sites/excalidraw.svg", true, Some("#6965DB")),
+    ("mods/native-browser/sites/figma.svg", false, None),
+    ("mods/native-browser/sites/flydotio.svg", false, None),
+    ("mods/native-browser/sites/framer.svg", true, Some("#2970FF")),
+    ("mods/native-browser/sites/gitbook.svg", true, Some("#B2E3EE")),
+    ("mods/native-browser/sites/github.svg", true, None),
+    ("mods/native-browser/sites/gitlab.svg", false, None),
+    ("mods/native-browser/sites/gmail.svg", false, None),
+    ("mods/native-browser/sites/google.svg", false, None),
+    ("mods/native-browser/sites/googlecalendar.svg", false, None),
+    ("mods/native-browser/sites/googlecloud.svg", false, None),
+    ("mods/native-browser/sites/googlecolab.svg", true, Some("#F9AB00")),
+    ("mods/native-browser/sites/googledocs.svg", true, Some("#4285F4")),
+    ("mods/native-browser/sites/googledrive.svg", false, None),
+    ("mods/native-browser/sites/googleforms.svg", true, Some("#9B6BFF")),
+    ("mods/native-browser/sites/googlegemini.svg", true, Some("#8E75B2")),
+    ("mods/native-browser/sites/googlemeet.svg", false, None),
+    ("mods/native-browser/sites/googlesheets.svg", true, Some("#34A853")),
+    ("mods/native-browser/sites/googleslides.svg", true, Some("#FBBC04")),
+    ("mods/native-browser/sites/grafana.svg", false, None),
+    ("mods/native-browser/sites/gusto.svg", true, Some("#F45D48")),
+    ("mods/native-browser/sites/hashicorp.svg", true, Some("#7B42BC")),
+    ("mods/native-browser/sites/heroku.svg", true, Some("#9E63FF")),
+    ("mods/native-browser/sites/hubspot.svg", true, Some("#FF7A59")),
+    ("mods/native-browser/sites/huggingface.svg", false, None),
+    ("mods/native-browser/sites/icloud.svg", true, Some("#3693F3")),
+    ("mods/native-browser/sites/instagram.svg", true, Some("#FF2981")),
+    ("mods/native-browser/sites/intercom.svg", true, Some("#286EFA")),
+    ("mods/native-browser/sites/jenkins.svg", true, Some("#D75F50")),
+    ("mods/native-browser/sites/jira.svg", false, None),
+    ("mods/native-browser/sites/kibana.svg", false, None),
+    ("mods/native-browser/sites/linear.svg", true, Some("#5E6AD2")),
+    ("mods/native-browser/sites/linkedin.svg", true, Some("#2D8CFF")),
+    ("mods/native-browser/sites/loom.svg", true, Some("#625DF5")),
+    ("mods/native-browser/sites/lucid.svg", true, Some("#F97B38")),
+    ("mods/native-browser/sites/markdown.svg", true, None),
+    ("mods/native-browser/sites/mastodon.svg", false, None),
+    ("mods/native-browser/sites/mdnwebdocs.svg", true, None),
+    ("mods/native-browser/sites/medium.svg", true, None),
+    ("mods/native-browser/sites/mermaid.svg", true, Some("#FF3670")),
+    ("mods/native-browser/sites/metabase.svg", true, Some("#509EE3")),
+    ("mods/native-browser/sites/microsoft.svg", false, None),
+    ("mods/native-browser/sites/microsoftazure.svg", false, None),
+    ("mods/native-browser/sites/microsoftoutlook.svg", true, Some("#28A8EA")),
+    ("mods/native-browser/sites/microsoftsharepoint.svg", true, Some("#038387")),
+    ("mods/native-browser/sites/microsoftteams.svg", false, None),
+    ("mods/native-browser/sites/miro.svg", true, Some("#FFD02F")),
+    ("mods/native-browser/sites/mistralai.svg", false, None),
+    ("mods/native-browser/sites/mixpanel.svg", true, Some("#7856FF")),
+    ("mods/native-browser/sites/neon.svg", false, None),
+    ("mods/native-browser/sites/netlify.svg", true, Some("#00C7B7")),
+    ("mods/native-browser/sites/newrelic.svg", true, Some("#3DEB95")),
+    ("mods/native-browser/sites/notion.svg", true, None),
+    ("mods/native-browser/sites/npm.svg", false, None),
+    ("mods/native-browser/sites/obsidian.svg", false, None),
+    ("mods/native-browser/sites/okta.svg", true, Some("#2AA3E8")),
+    ("mods/native-browser/sites/openai.svg", true, None),
+    ("mods/native-browser/sites/pagerduty.svg", true, Some("#30F86C")),
+    ("mods/native-browser/sites/perplexity.svg", true, Some("#45D0E3")),
+    ("mods/native-browser/sites/planetscale.svg", true, None),
+    ("mods/native-browser/sites/posthog.svg", false, None),
+    ("mods/native-browser/sites/postman.svg", false, None),
+    ("mods/native-browser/sites/prometheus.svg", true, Some("#E8623F")),
+    ("mods/native-browser/sites/protonmail.svg", true, Some("#6D4AFF")),
+    ("mods/native-browser/sites/pypi.svg", false, None),
+    ("mods/native-browser/sites/railway.svg", true, None),
+    ("mods/native-browser/sites/reddit.svg", false, None),
+    ("mods/native-browser/sites/render.svg", true, None),
+    ("mods/native-browser/sites/replit.svg", true, Some("#F97D2F")),
+    ("mods/native-browser/sites/resend.svg", true, None),
+    ("mods/native-browser/sites/retool.svg", true, Some("#F2633A")),
+    ("mods/native-browser/sites/rust.svg", true, Some("#F74C00")),
+    ("mods/native-browser/sites/salesforce.svg", false, None),
+    ("mods/native-browser/sites/sentry.svg", true, Some("#8C7AE6")),
+    ("mods/native-browser/sites/shopify.svg", false, None),
+    ("mods/native-browser/sites/shortcut.svg", true, Some("#494BCB")),
+    ("mods/native-browser/sites/slack.svg", false, None),
+    ("mods/native-browser/sites/snowflake.svg", true, Some("#3EBCEA")),
+    ("mods/native-browser/sites/spotify.svg", true, Some("#43E57D")),
+    ("mods/native-browser/sites/stackblitz.svg", true, Some("#3A8BEE")),
+    ("mods/native-browser/sites/stackoverflow.svg", false, None),
+    ("mods/native-browser/sites/statuspage.svg", true, Some("#5A85CE")),
+    ("mods/native-browser/sites/storybook.svg", false, None),
+    ("mods/native-browser/sites/stripe.svg", true, Some("#635BFF")),
+    ("mods/native-browser/sites/substack.svg", true, Some("#FF6719")),
+    ("mods/native-browser/sites/supabase.svg", false, None),
+    ("mods/native-browser/sites/swagger.svg", true, Some("#85EA2D")),
+    ("mods/native-browser/sites/tailscale.svg", true, None),
+    ("mods/native-browser/sites/telegram.svg", false, None),
+    ("mods/native-browser/sites/terraform.svg", false, None),
+    ("mods/native-browser/sites/threads.svg", true, None),
+    ("mods/native-browser/sites/tldraw.svg", true, None),
+    ("mods/native-browser/sites/trello.svg", false, None),
+    ("mods/native-browser/sites/turso.svg", true, Some("#4FF8D2")),
+    ("mods/native-browser/sites/twilio.svg", true, Some("#F22F46")),
+    ("mods/native-browser/sites/twitch.svg", true, Some("#9146FF")),
+    ("mods/native-browser/sites/unsplash.svg", true, None),
+    ("mods/native-browser/sites/upstash.svg", false, None),
+    ("mods/native-browser/sites/v0.svg", true, None),
+    ("mods/native-browser/sites/vercel.svg", true, None),
+    ("mods/native-browser/sites/webflow.svg", true, Some("#3280F6")),
+    ("mods/native-browser/sites/whatsapp.svg", false, None),
+    ("mods/native-browser/sites/wikipedia.svg", true, None),
+    ("mods/native-browser/sites/x.svg", true, None),
+    ("mods/native-browser/sites/ycombinator.svg", true, Some("#F0652F")),
+    ("mods/native-browser/sites/youtube.svg", false, None),
+    ("mods/native-browser/sites/zendesk.svg", true, Some("#78A300")),
+    ("mods/native-browser/sites/zoom.svg", false, None),
+];
+
 const SITE_RULES: &[(&str, &str)] = &[
     // Specific subdomains that belong to distinct products under a parent domain
     ("mail.google.com", "mods/native-browser/sites/gmail.svg"),
@@ -247,6 +413,16 @@ const SELF_HOSTED_PREFIXES: &[(&str, &str)] = &[
     ("storybook.", "mods/native-browser/sites/storybook.svg"),
 ];
 
+fn style_for(path: &'static str) -> SiteIcon {
+    match ICON_STYLES.binary_search_by_key(&path, |&(p, _, _)| p) {
+        Ok(i) => {
+            let (p, tint, color) = ICON_STYLES[i];
+            SiteIcon { path: p, tint, color }
+        }
+        Err(_) => SiteIcon { path, tint: true, color: None },
+    }
+}
+
 fn host_matches(host: &str, domain: &str) -> bool {
     host == domain
         || (host.len() > domain.len()
@@ -254,15 +430,15 @@ fn host_matches(host: &str, domain: &str) -> bool {
             && host.as_bytes()[host.len() - domain.len() - 1] == b'.')
 }
 
-pub fn site_icon(url: &str) -> &'static str {
+pub fn site_icon(url: &str) -> SiteIcon {
     let Ok(parsed) = url::Url::parse(url.trim()) else {
-        return DEFAULT_ICON;
+        return DEFAULT;
     };
     if !matches!(parsed.scheme(), "http" | "https") {
-        return DEFAULT_ICON;
+        return DEFAULT;
     }
     let Some(raw_host) = parsed.host_str() else {
-        return DEFAULT_ICON;
+        return DEFAULT;
     };
     let lowered = raw_host.trim_end_matches('.').to_ascii_lowercase();
     let host = lowered.strip_prefix("www.").unwrap_or(&lowered);
@@ -270,7 +446,7 @@ pub fn site_icon(url: &str) -> &'static str {
 
     if host_matches(host, "atlassian.net") {
         if path == "/wiki" || path.starts_with("/wiki/") {
-            return "mods/native-browser/sites/confluence.svg";
+            return style_for("mods/native-browser/sites/confluence.svg");
         }
         if path == "/jira"
             || path.starts_with("/jira/")
@@ -279,45 +455,45 @@ pub fn site_icon(url: &str) -> &'static str {
             || path.starts_with("/servicedesk")
             || path.starts_with("/secure/")
         {
-            return "mods/native-browser/sites/jira.svg";
+            return style_for("mods/native-browser/sites/jira.svg");
         }
-        return "mods/native-browser/sites/atlassian.svg";
+        return style_for("mods/native-browser/sites/atlassian.svg");
     }
 
     if host == "docs.google.com" {
         if path.starts_with("/spreadsheets") {
-            return "mods/native-browser/sites/googlesheets.svg";
+            return style_for("mods/native-browser/sites/googlesheets.svg");
         }
         if path.starts_with("/presentation") {
-            return "mods/native-browser/sites/googleslides.svg";
+            return style_for("mods/native-browser/sites/googleslides.svg");
         }
         if path.starts_with("/forms") {
-            return "mods/native-browser/sites/googleforms.svg";
+            return style_for("mods/native-browser/sites/googleforms.svg");
         }
-        return "mods/native-browser/sites/googledocs.svg";
+        return style_for("mods/native-browser/sites/googledocs.svg");
     }
 
     for &(domain, icon) in SITE_RULES {
         if host_matches(host, domain) {
-            return icon;
+            return style_for(icon);
         }
     }
 
     for &(prefix, icon) in SELF_HOSTED_PREFIXES {
         if host.starts_with(prefix) {
-            return icon;
+            return style_for(icon);
         }
     }
 
-    DEFAULT_ICON
+    DEFAULT
 }
 
-pub fn pane_icon(url: &str, is_markdown: bool) -> &'static str {
+pub fn pane_icon(url: &str, is_markdown: bool) -> SiteIcon {
     if is_markdown
         && let Ok(parsed) = url::Url::parse(url.trim())
         && matches!(parsed.host_str(), Some("127.0.0.1" | "localhost" | "::1"))
     {
-        return MARKDOWN_ICON;
+        return style_for(MARKDOWN_ICON);
     }
     site_icon(url)
 }
@@ -330,46 +506,46 @@ mod tests {
     #[test]
     fn matches_common_workplace_tools_and_paths() {
         let cases = [
-            ("https://linear.app/vibes/issue/ORC-123", "mods/native-browser/sites/linear.svg"),
-            ("https://www.linear.app/", "mods/native-browser/sites/linear.svg"),
-            ("https://gitlab.com/vibes/repos/studio/-/merge_requests/1", "mods/native-browser/sites/gitlab.svg"),
-            ("https://gitlab.internal.company.com/team/repo", "mods/native-browser/sites/gitlab.svg"),
-            ("https://github.com/Volpestyle/herdr-browser", "mods/native-browser/sites/github.svg"),
-            ("https://gist.github.com/user/123", "mods/native-browser/sites/github.svg"),
-            ("https://app.datadoghq.com/logs", "mods/native-browser/sites/datadog.svg"),
-            ("https://app.slack.com/client/T123/C456", "mods/native-browser/sites/slack.svg"),
-            ("https://acme.atlassian.net/browse/ENG-42", "mods/native-browser/sites/jira.svg"),
-            ("https://acme.atlassian.net/jira/software/projects/ENG", "mods/native-browser/sites/jira.svg"),
-            ("https://acme.atlassian.net/wiki/spaces/ENG/pages/1", "mods/native-browser/sites/confluence.svg"),
-            ("https://acme.atlassian.net/admin", "mods/native-browser/sites/atlassian.svg"),
-            ("https://docs.google.com/document/d/abc/edit", "mods/native-browser/sites/googledocs.svg"),
-            ("https://docs.google.com/spreadsheets/d/abc/edit", "mods/native-browser/sites/googlesheets.svg"),
-            ("https://docs.google.com/presentation/d/abc/edit", "mods/native-browser/sites/googleslides.svg"),
-            ("https://docs.google.com/forms/d/abc/viewform", "mods/native-browser/sites/googleforms.svg"),
-            ("https://mail.google.com/mail/u/0/#inbox", "mods/native-browser/sites/gmail.svg"),
-            ("https://calendar.google.com/calendar/u/0/r", "mods/native-browser/sites/googlecalendar.svg"),
-            ("https://meet.google.com/abc-defg-hij", "mods/native-browser/sites/googlemeet.svg"),
-            ("https://drive.google.com/drive/my-drive", "mods/native-browser/sites/googledrive.svg"),
-            ("https://www.google.com/search?q=rust", "mods/native-browser/sites/google.svg"),
-            ("https://us-east-1.console.aws.amazon.com/lambda/home", "mods/native-browser/sites/amazonaws.svg"),
-            ("https://d-123.awsapps.com/start", "mods/native-browser/sites/amazonaws.svg"),
-            ("https://www.amazon.com/dp/B000", "mods/native-browser/sites/amazon.svg"),
-            ("https://teams.microsoft.com/v2/", "mods/native-browser/sites/microsoftteams.svg"),
-            ("https://outlook.office.com/mail/", "mods/native-browser/sites/microsoftoutlook.svg"),
-            ("https://acme.sharepoint.com/sites/eng", "mods/native-browser/sites/microsoftsharepoint.svg"),
-            ("https://portal.azure.com/#home", "mods/native-browser/sites/microsoftazure.svg"),
-            ("https://www.figma.com/design/abc/Spec", "mods/native-browser/sites/figma.svg"),
-            ("https://www.notion.so/Workspace-123", "mods/native-browser/sites/notion.svg"),
-            ("https://claude.ai/chat/123", "mods/native-browser/sites/claude.svg"),
-            ("https://console.anthropic.com/settings", "mods/native-browser/sites/anthropic.svg"),
-            ("https://chatgpt.com/c/123", "mods/native-browser/sites/openai.svg"),
-            ("https://acme.okta.com/app/UserHome", "mods/native-browser/sites/okta.svg"),
-            ("https://grafana.prod.internal/d/abc", "mods/native-browser/sites/grafana.svg"),
-            ("https://kibana.corp.internal/app/discover", "mods/native-browser/sites/kibana.svg"),
-            ("https://argocd.corp.internal/applications", "mods/native-browser/sites/argo.svg"),
+            ("https://linear.app/vibes/issue/ORC-123", "mods/native-browser/sites/linear.svg", true, Some("#5E6AD2")),
+            ("https://www.linear.app/", "mods/native-browser/sites/linear.svg", true, Some("#5E6AD2")),
+            ("https://gitlab.com/vibes/repos/studio/-/merge_requests/1", "mods/native-browser/sites/gitlab.svg", false, None),
+            ("https://gitlab.internal.company.com/team/repo", "mods/native-browser/sites/gitlab.svg", false, None),
+            ("https://github.com/Volpestyle/herdr-browser", "mods/native-browser/sites/github.svg", true, None),
+            ("https://gist.github.com/user/123", "mods/native-browser/sites/github.svg", true, None),
+            ("https://app.datadoghq.com/logs", "mods/native-browser/sites/datadog.svg", true, Some("#9B6BFF")),
+            ("https://app.slack.com/client/T123/C456", "mods/native-browser/sites/slack.svg", false, None),
+            ("https://acme.atlassian.net/browse/ENG-42", "mods/native-browser/sites/jira.svg", false, None),
+            ("https://acme.atlassian.net/jira/software/projects/ENG", "mods/native-browser/sites/jira.svg", false, None),
+            ("https://acme.atlassian.net/wiki/spaces/ENG/pages/1", "mods/native-browser/sites/confluence.svg", false, None),
+            ("https://acme.atlassian.net/admin", "mods/native-browser/sites/atlassian.svg", false, None),
+            ("https://docs.google.com/document/d/abc/edit", "mods/native-browser/sites/googledocs.svg", true, Some("#4285F4")),
+            ("https://docs.google.com/spreadsheets/d/abc/edit", "mods/native-browser/sites/googlesheets.svg", true, Some("#34A853")),
+            ("https://docs.google.com/presentation/d/abc/edit", "mods/native-browser/sites/googleslides.svg", true, Some("#FBBC04")),
+            ("https://docs.google.com/forms/d/abc/viewform", "mods/native-browser/sites/googleforms.svg", true, Some("#9B6BFF")),
+            ("https://mail.google.com/mail/u/0/#inbox", "mods/native-browser/sites/gmail.svg", false, None),
+            ("https://calendar.google.com/calendar/u/0/r", "mods/native-browser/sites/googlecalendar.svg", false, None),
+            ("https://meet.google.com/abc-defg-hij", "mods/native-browser/sites/googlemeet.svg", false, None),
+            ("https://drive.google.com/drive/my-drive", "mods/native-browser/sites/googledrive.svg", false, None),
+            ("https://www.google.com/search?q=rust", "mods/native-browser/sites/google.svg", false, None),
+            ("https://us-east-1.console.aws.amazon.com/lambda/home", "mods/native-browser/sites/amazonaws.svg", true, Some("#FF9900")),
+            ("https://d-123.awsapps.com/start", "mods/native-browser/sites/amazonaws.svg", true, Some("#FF9900")),
+            ("https://www.amazon.com/dp/B000", "mods/native-browser/sites/amazon.svg", true, Some("#FFA929")),
+            ("https://teams.microsoft.com/v2/", "mods/native-browser/sites/microsoftteams.svg", false, None),
+            ("https://outlook.office.com/mail/", "mods/native-browser/sites/microsoftoutlook.svg", true, Some("#28A8EA")),
+            ("https://acme.sharepoint.com/sites/eng", "mods/native-browser/sites/microsoftsharepoint.svg", true, Some("#038387")),
+            ("https://portal.azure.com/#home", "mods/native-browser/sites/microsoftazure.svg", false, None),
+            ("https://www.figma.com/design/abc/Spec", "mods/native-browser/sites/figma.svg", false, None),
+            ("https://www.notion.so/Workspace-123", "mods/native-browser/sites/notion.svg", true, None),
+            ("https://claude.ai/chat/123", "mods/native-browser/sites/claude.svg", true, Some("#D97757")),
+            ("https://console.anthropic.com/settings", "mods/native-browser/sites/anthropic.svg", true, None),
+            ("https://chatgpt.com/c/123", "mods/native-browser/sites/openai.svg", true, None),
+            ("https://acme.okta.com/app/UserHome", "mods/native-browser/sites/okta.svg", true, Some("#2AA3E8")),
+            ("https://grafana.prod.internal/d/abc", "mods/native-browser/sites/grafana.svg", false, None),
+            ("https://kibana.corp.internal/app/discover", "mods/native-browser/sites/kibana.svg", false, None),
+            ("https://argocd.corp.internal/applications", "mods/native-browser/sites/argo.svg", false, None),
         ];
-        for (url, expected) in cases {
-            assert_eq!(site_icon(url), expected, "url: {url}");
+        for (url, path, tint, color) in cases {
+            assert_eq!(site_icon(url), SiteIcon { path, tint, color }, "url: {url}");
         }
     }
 
@@ -387,28 +563,33 @@ mod tests {
             "https://my-gitlab.example.com/",
             "https://example.com/",
         ] {
-            assert_eq!(site_icon(url), DEFAULT_ICON, "url: {url}");
+            assert_eq!(site_icon(url), DEFAULT, "url: {url}");
         }
     }
 
     #[test]
     fn markdown_preview_uses_markdown_icon_until_navigated_away() {
         assert_eq!(
-            pane_icon("http://127.0.0.1:54321/token/README.md", true),
+            pane_icon("http://127.0.0.1:54321/token/README.md", true).path,
             MARKDOWN_ICON
         );
         assert_eq!(
             pane_icon("https://linear.app/vibes", true),
-            "mods/native-browser/sites/linear.svg"
+            SiteIcon {
+                path: "mods/native-browser/sites/linear.svg",
+                tint: true,
+                color: Some("#5E6AD2"),
+            }
         );
         assert_eq!(
             pane_icon("http://127.0.0.1:54321/token/README.md", false),
-            DEFAULT_ICON
+            DEFAULT
         );
     }
 
     #[test]
-    fn every_referenced_site_icon_is_shipped_and_none_are_orphaned() {
+    fn every_referenced_site_icon_is_shipped_styled_and_valid() {
+        assert!(ICON_STYLES.windows(2).all(|w| w[0].0 < w[1].0), "ICON_STYLES must be sorted");
         let shipped: BTreeSet<String> = crate::mods::DEFAULT_MODS
             .iter()
             .filter_map(|(path, _)| path.starts_with("native-browser/sites/").then(|| format!("mods/{path}")))
@@ -428,11 +609,21 @@ mod tests {
         for &(_, icon) in SELF_HOSTED_PREFIXES {
             referenced.insert(icon);
         }
+        let styled: BTreeSet<&'static str> = ICON_STYLES.iter().map(|&(p, _, _)| p).collect();
         for icon in &referenced {
             assert!(shipped.contains(*icon), "icon referenced in rules is not shipped: {icon}");
+            assert!(styled.contains(*icon), "icon referenced in rules has no style entry: {icon}");
         }
         for icon in &shipped {
             assert!(referenced.contains(icon.as_str()), "shipped site icon is never referenced: {icon}");
+            assert!(styled.contains(icon.as_str()), "shipped site icon has no style entry: {icon}");
+        }
+        for &(path, tint, color) in ICON_STYLES {
+            assert!(shipped.contains(path), "styled icon not shipped: {path}");
+            if let Some(hex) = color {
+                assert!(tint, "multicolor icon {path} should not also set tint color");
+                assert!(crate::settings::parse_hex(hex).is_some(), "invalid hex {hex} for {path}");
+            }
         }
     }
 }

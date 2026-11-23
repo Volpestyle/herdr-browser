@@ -35,6 +35,12 @@ function folder(cwd) {
   return cwd === h ? "~" : cwd.startsWith(h + "/") ? "~" + cwd.slice(h.length) : cwd;
 }
 
+function browserIcon(p, color) {
+  const path = p?.icon || "mods/native-browser/browser.svg";
+  if (p?.icon_tint === false) return image(path).w(14).h(14).flex_none();
+  return svg(path).size(13).flex_none().text_color(p?.icon_color || color);
+}
+
 function browserSubtitle(url) {
   if (!url || url === "about:blank") return "";
   return url.replace(/^https?:\/\//, "").replace(/^www\./, "");
@@ -68,7 +74,7 @@ export default class Pane extends View {
     const browser = p.mod === "native-browser";
     const name = ((p.program?.agent || p.program?.shell) && p.program.name) || p.title || p.program?.name || (browser ? "Browser" : "shell");
     const pic = browser
-      ? svg(p.icon || "mods/native-browser/browser.svg").size(13).flex_none().text_color(t.dim)
+      ? browserIcon(p, t.dim)
       : icon(p.program, 14, t.dim);
     const sub = p.cwd ? folder(p.cwd) : browser ? browserSubtitle(p.url) : "";
     const st = p.status;

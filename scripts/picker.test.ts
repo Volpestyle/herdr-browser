@@ -26,7 +26,7 @@ let testSpaces: any[] = [];
 let testPanes: any[] = [];
 let closed = 0;
 const values: Record<string, any> = {
-  View: class {}, div: element, svg: element, v_flex: element, h_flex: element,
+  View: class {}, div: element, svg: element, image: element, v_flex: element, h_flex: element,
   Input: { new: element }, InputState: { new: () => ({ handlers: {} as Record<string, any>, on(name: string, handler: any) { this.handlers[name] = handler; }, focus() {} }) },
   agents: () => [], spaces: () => testSpaces, panes: () => testPanes, terminals: () => [], theme: () => ({ hover: "hover" }),
   settings: () => ({ zoom: 1.2 }), props: () => ({}), shared: () => ({}),

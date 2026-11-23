@@ -14,6 +14,12 @@ function find(node, id) {
 // Same as the agents mod: drops a status glyph, keeps a leading bracket or quote.
 const clean = (s) => (s ?? "").replace(/^[^\p{L}\p{N}\p{Ps}\p{Pi}]+/u, "").replace(/^\[ [!.] \] /, "").trim();
 
+function browserIcon(lead, fallback) {
+  const path = lead?.icon || "mods/native-browser/browser.svg";
+  if (lead?.icon_tint === false) return image(path).w(14).h(14).flex_none();
+  return svg(path).size(13).flex_none().text_color(lead?.icon_color || fallback);
+}
+
 function browserLabel(lead) {
   const title = (lead?.title ?? "").trim();
   if (title && title !== "native-browser" && title !== "Browser") return title;
@@ -131,7 +137,7 @@ export default class Tabs extends View {
           else run("tab.select", { id: c.id });
         })
         .on_mouse_down("right", (_e, cx) => { cx.stop_propagation(); openOverlay({ mod: "menu", kind: "popup", width: 200, props: { tab: "tab", target: { id: c.id, space: space.id } } }); })
-        .when(browser, el => el.child(svg(lead?.icon || "mods/native-browser/browser.svg").size(13).flex_none().text_color(t.muted)))
+        .when(browser, el => el.child(browserIcon(lead, t.muted)))
         .when(pin, el => el.tooltip(name))
         .when(Boolean(program?.icon), el => el.child(program.tint ? svg(program.icon).size(14).text_color(t.muted) : image(program.icon).size(14)))
         .child(div().max_w(pin ? 110 : 170).truncate().child(c.zoomed ? `${name} Z` : name))

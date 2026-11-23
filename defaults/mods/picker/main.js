@@ -4,7 +4,7 @@
 // a tab, Esc to leave. Last rows: new work (a tab here, a space on this
 // computer or on each connected machine).
 
-import { View, div, svg } from "gpui-kit";
+import { View, div, svg, image } from "gpui-kit";
 import { v_flex, h_flex, InputState, Input } from "gpui-base";
 import { agents, spaces, panes, terminals, run, hc, theme, settings, props, closeOverlay, openOverlay, shared, setShared } from "herdr";
 
@@ -120,7 +120,9 @@ export default class Picker extends View {
     };
     const tabTitle = (ctx) => {
       const browser = ps.find((p) => p.tab === ctx.id && p.mod === "native-browser");
-      const icon = browser ? (browser.icon || "mods/native-browser/browser.svg") : null;
+      const icon = browser
+        ? { path: browser.icon || "mods/native-browser/browser.svg", tint: browser.icon_tint !== false, color: browser.icon_color ?? null }
+        : null;
       if (ctx.named) return { label: ctx.name, url: browser?.url ?? "", icon };
       if (!browser) return { label: ctx.name, url: "", icon: null };
       const title = (browser.title ?? "").trim();
@@ -279,7 +281,7 @@ export default class Picker extends View {
         .when(on, (el) => el.bg(t.hover))
         .hover((s) => s.bg(t.hover))
         .on_click(() => this.go(r))
-        .child(r.ctx.status ? this.glyph(t, r.ctx.status) : r.icon ? svg(r.icon).size(12).flex_none().text_color(t.muted) : this.glyph(t, r.ctx.status))
+        .child(r.ctx.status ? this.glyph(t, r.ctx.status) : r.icon ? (r.icon.tint ? svg(r.icon.path).size(12).flex_none().text_color(r.icon.color || t.muted) : image(r.icon.path).w(13).h(13).flex_none()) : this.glyph(t, r.ctx.status))
         .child(div().flex_1().truncate().text_color(t.foreground).when(here, (d) => d.font_semibold()).child(r.label ?? r.ctx.name))
         .when(r.ctx.status === "blocked", (el) => el.child(div().text_size(11).text_color(t.blocked).child("needs you")))
         .when(r.ctx.status === "done", (el) => el.child(div().text_size(11).text_color(t.done).child("finished")))

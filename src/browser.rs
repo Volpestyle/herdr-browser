@@ -848,6 +848,25 @@ impl Render for Browser {
                 .text_size(px(12.))
                 .children(favorites.iter().enumerate().map(|(i, f)| {
                     let url = f.url.clone();
+                    let icon = site_icon(&f.url);
+                    let icon_el: AnyElement = if icon.tint {
+                        svg()
+                            .path(icon.path)
+                            .size(px(12.))
+                            .flex_none()
+                            .text_color(
+                                icon.color
+                                    .and_then(crate::settings::parse_hex)
+                                    .unwrap_or_else(|| color("muted")),
+                            )
+                            .into_any_element()
+                    } else {
+                        img(crate::mods::app_dir().join(icon.path))
+                            .w(px(12.))
+                            .h(px(12.))
+                            .flex_none()
+                            .into_any_element()
+                    };
                     div()
                         .id(("browser-favorite", i))
                         .flex_none()
@@ -865,7 +884,7 @@ impl Render for Browser {
                                 this.focus_page();
                             }
                         }))
-                        .child(svg().path(site_icon(&f.url)).size(px(12.)).flex_none().text_color(color("muted")))
+                        .child(icon_el)
                         .child(div().min_w_0().overflow_hidden().whitespace_nowrap().text_ellipsis().child(f.title.clone()))
                 }))
         });

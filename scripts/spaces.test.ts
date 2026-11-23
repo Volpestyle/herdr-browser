@@ -592,18 +592,32 @@ test("unnamed browser tabs in spaces show their page title or url host", () => {
   expect(tabName({ name: "Custom", named: true }, { mod: "native-browser", title: "Datadog Monitor", url: "https://app.datadoghq.com" })).toBe("Custom");
 });
 
-test("browser tabs in spaces render their site icon or fall back to the globe", () => {
-  const svgs: string[] = [];
-  const el: any = new Proxy({}, { get: () => () => el });
+test("browser tabs in spaces render multicolor images, brand-tinted svgs, and globe fallbacks", () => {
+  const svgs: { path: string; color?: string }[] = [];
+  const imgs: string[] = [];
+  const makeEl = (entry?: { color?: string }): any => {
+    const proxy: any = new Proxy({}, {
+      get: (_, method) => (...args: any[]) => {
+        if (method === "text_color" && entry) entry.color = args[0];
+        return proxy;
+      },
+    });
+    return proxy;
+  };
   const tabIcon = new Function("View", "svg", "image", `${source}; return tabIcon;`)(
     class {},
-    (path: string) => { svgs.push(path); return el; },
-    () => el,
+    (path: string) => { const entry: { path: string; color?: string } = { path }; svgs.push(entry); return makeEl(entry); },
+    (path: string) => { imgs.push(path); return makeEl(); },
   );
-  const t = new Proxy({}, { get: () => "#000000" });
-  tabIcon({ mod: "native-browser", icon: "mods/native-browser/sites/gitlab.svg" }, t);
+  const t = new Proxy({}, { get: () => "#999999" });
+  tabIcon({ mod: "native-browser", icon: "mods/native-browser/sites/gitlab.svg", icon_tint: false }, t);
+  tabIcon({ mod: "native-browser", icon: "mods/native-browser/sites/linear.svg", icon_tint: true, icon_color: "#5E6AD2" }, t);
   tabIcon({ mod: "native-browser" }, t);
-  expect(svgs).toEqual(["mods/native-browser/sites/gitlab.svg", "mods/native-browser/browser.svg"]);
+  expect(imgs).toEqual(["mods/native-browser/sites/gitlab.svg"]);
+  expect(svgs).toEqual([
+    { path: "mods/native-browser/sites/linear.svg", color: "#5E6AD2" },
+    { path: "mods/native-browser/browser.svg", color: "#999999" },
+  ]);
 });
 
 test("dragging tabs in spaces reorders within a space and moves across spaces on the same machine", () => {

@@ -157,6 +157,13 @@
       ]
     },
     {
+      "name": "SVG Logos (Gil Barbara)",
+      "source": "https://github.com/gilbarbara/logos; brands remain their owners' trademarks.",
+      "files": [
+        "licenses/CC0-1.0.txt"
+      ]
+    },
+    {
       "name": "Geist and Geist Mono fonts",
       "source": "https://github.com/vercel/geist-font",
       "files": [
