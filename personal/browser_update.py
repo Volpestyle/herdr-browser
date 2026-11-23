@@ -550,6 +550,30 @@ def install_pending(state):
     print(f'Installed Herdr Browser {pending["tag"]}')
 
 
+def restart_and_install(state, *, app=APP, launcher=None, running=app_running, timeout=15):
+    pending = state.get('pending')
+    if not pending:
+        print('No staged update to apply.')
+        return False
+    candidate = Path(pending['bundle'])
+    run(['/usr/bin/codesign', '--verify', '--deep', '--strict', candidate])
+    launcher_path = Path(launcher or Path.home() / '.local/bin/herdr-browser')
+    was_running = running(app)
+    if was_running:
+        if launcher_path.is_file():
+            run([launcher_path, 'do', 'app.quit'], capture=True, check=False)
+        deadline = time.monotonic() + timeout
+        while running(app):
+            if time.monotonic() >= deadline:
+                raise RuntimeError('Herdr Browser did not exit in time; quit it manually and run herdr-browser-update install.')
+            time.sleep(.1)
+    install_pending(state)
+    if was_running:
+        env = {k: v for k, v in os.environ.items() if k not in ('NO_COLOR', 'FORCE_COLOR')}
+        run(['/usr/bin/open', app], env=env)
+    return True
+
+
 def migrate_config(source=None, destination=None):
     """Copy the existing appearance once; future updates preserve personal edits."""
     source = source or Path.home() / '.config/herdr-app'
@@ -703,7 +727,7 @@ def chromium_status(app=None, fetch=None):
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument('command', choices=['snapshot', 'build', 'check', 'install', 'status', 'enable', 'rollback'])
+    parser.add_argument('command', choices=['snapshot', 'build', 'check', 'install', 'restart', 'status', 'enable', 'rollback'])
     parser.add_argument('--tag')
     parser.add_argument('--base')
     parser.add_argument('--engine', help='Pinned stable CEF crate version for a manual build')
@@ -738,6 +762,7 @@ def main():
             state['installed'], state['previous'] = state.get('previous'), state.get('installed')
             state['status'] = 'rolled_back'; write_json(LOCAL / 'state.json', state)
         elif args.command == 'install': install_pending(state); write_launchers()
+        elif args.command == 'restart': restart_and_install(state)
         else:
             install_pending(state)
             tag = args.tag or latest_release(state, force=args.force)

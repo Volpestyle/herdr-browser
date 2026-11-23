@@ -482,5 +482,34 @@ class ChromiumFreshnessTests(unittest.TestCase):
         self.assertEqual(printed['chromium']['securityReleasesBehind'], 2)
         self.assertEqual({path: path.stat().st_mtime_ns for path in before}, before)
 
+    def test_restart_and_install_quits_promotes_and_reopens(self):
+        candidate = self.root / 'staged/Herdr Browser.app'
+        candidate.mkdir(parents=True)
+        launcher = self.root / 'herdr-browser'
+        launcher.write_text('#!/bin/sh\n')
+        state = {'status': 'staged', 'pending': {'bundle': str(candidate), 'tag': 'v0.1.16'}}
+        calls = []
+        running_checks = iter([True, True, False])
+
+        def fake_run(args, **kwargs):
+            calls.append(args)
+            return subprocess.CompletedProcess(args, 0, b'', b'')
+
+        with patch.object(updater, 'run', side_effect=fake_run), \
+                patch.object(updater, 'install_pending', side_effect=lambda s: calls.append(['install_pending'])):
+            self.assertTrue(updater.restart_and_install(
+                state,
+                app=self.root / 'Herdr Browser.app',
+                launcher=launcher,
+                running=lambda _app: next(running_checks),
+            ))
+        self.assertEqual(calls[0][:4], ['/usr/bin/codesign', '--verify', '--deep', '--strict'])
+        self.assertEqual(calls[1], [launcher, 'do', 'app.quit'])
+        self.assertEqual(calls[2], ['install_pending'])
+        self.assertEqual(calls[3], ['/usr/bin/open', self.root / 'Herdr Browser.app'])
+
+    def test_restart_and_install_is_noop_without_pending(self):
+        self.assertFalse(updater.restart_and_install({'status': 'installed'}))
+
 
 if __name__ == '__main__': unittest.main()

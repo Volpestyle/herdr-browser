@@ -201,6 +201,8 @@ fn main() {
                 mods::finish_shared();
                 telemetry::quit();
                 let _ = update::apply();
+                #[cfg(target_os = "macos")]
+                apply_staged_browser_update_on_quit();
                 async {}
             })
             .detach();
@@ -253,4 +255,43 @@ pub fn open_main(core: std::sync::Arc<hc::Core>, requests: async_channel::Receiv
             cx.open_window(options, |window, cx| cx.new(|cx| window::AppWindow::new(core, requests, window, cx)))
                 .expect("cannot open the Herdr window");
             if std::env::var_os("HERDR_APP_BACKGROUND").is_none() { cx.activate(true); }
+}
+
+#[cfg(target_os = "macos")]
+fn apply_staged_browser_update_on_quit() {
+    if std::env::var_os("HERDR_BROWSER_TEST_KEYCHAIN").is_some() {
+        return;
+    }
+    let Ok(exe) = std::env::current_exe().and_then(|p| p.canonicalize()) else {
+        return;
+    };
+    let is_app = exe
+        .parent()
+        .and_then(|p| p.parent())
+        .and_then(|p| p.parent())
+        .and_then(|b| b.extension())
+        .is_some_and(|e| e == "app");
+    if !is_app {
+        return;
+    }
+    let Some(home) = std::env::var_os("HOME") else {
+        return;
+    };
+    let updater = std::path::PathBuf::from(home).join(".local/bin/herdr-browser-update");
+    if !updater.is_file() {
+        return;
+    }
+    let pid = std::process::id().to_string();
+    let _ = std::process::Command::new("/bin/sh")
+        .args([
+            "-c",
+            "pid=$1; u=$2; i=0; while kill -0 \"$pid\" 2>/dev/null && [ \"$i\" -lt 150 ]; do sleep 0.1; i=$((i+1)); done; exec \"$u\" install",
+            "herdr-apply-staged",
+            &pid,
+            &updater.to_string_lossy(),
+        ])
+        .stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .spawn();
 }
