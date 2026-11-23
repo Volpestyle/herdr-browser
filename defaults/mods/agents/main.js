@@ -234,13 +234,14 @@ export default class Agents extends View {
     });
   }
 
-  subRow(t, s, shown, compact) {
+  subRow(t, s, shown, compact, accent) {
     const k = s.t;
     const st = kidStatus(k, this.listed);
     const pic = icon(k.program, 14, t.foreground);
     const on = k.address === shown;
     return h_flex()
       .id(`sub-${k.address}`)
+      .relative()
       .pl(39)
       .pr(8)
       .rounded(8)
@@ -249,14 +250,16 @@ export default class Agents extends View {
       .gap(0)
       .items_center()
       .text_size(12.5)
-      .when(on, (el) => el.bg(t.raised))
-      .hover((s) => s.bg(t.hover))
+      .border_1()
+      .border_color(on ? t.input : "#00000000")
+      .when(on, (el) => el.bg(t.selected).child(div().absolute().left(2).w(2).h(12).rounded_full().bg(accent ?? t.foreground)))
+      .when(!on, (el) => el.hover((s) => s.bg(t.hover)))
       .on_click(() => (this.listed.has(k.address) ? run("pane.focus", { terminal: k.address }) : this.peek(k.address)))
       .children(s.lines.map(l => div().self_start().mt(-4).w(9).h(17).mr(4).flex_none()
         .when(Boolean(l), el => el.border_l(1.5).border_color(t.input))
         .when(l === "└" || l === "├", el => el.border_b(1.5).rounded_bl(6))))
       .when(Boolean(pic), el => el.child(div().mr(8).child(pic)))
-      .child(div().flex_1().truncate().text_color(on ? t.foreground : t.muted).child(k.name || k.template || k.program?.name || k.address))
+      .child(div().flex_1().truncate().text_color(on ? t.foreground : t.muted).when(on, (el) => el.font_weight(500)).child(k.name || k.template || k.program?.name || k.address))
       .child(this.status(t, { status: st }, compact));
   }
 
@@ -302,7 +305,8 @@ export default class Agents extends View {
       const subs = collapsed ? [] : this.tree(all, a.address);
       const r = row(a, i, subs);
       if (this.folded.has(a.address)) return [r];
-      return [r, ...subs.map((s) => this.subRow(t, s, shown, byPriority))];
+      const accent = spaceFill(spaceById.get(a.space), t, spColors) ?? t.foreground;
+      return [r, ...subs.map((s) => this.subRow(t, s, shown, byPriority, accent))];
     };
 
     // The fold chevron; folded, the count too, colored by the most urgent one.
@@ -408,15 +412,18 @@ export default class Agents extends View {
       const dot = full ? spaceMark(sp, spFill, true) : null;
       return h_flex()
         .id(`ag-${a.address}`)
+        .relative()
         .px(8)
         .h(30)
         .flex_none()
         .rounded(8)
         .items_center()
         .gap(9)
-        .when(a.focused, (el) => el.bg(t.selected))
+        .border_1()
+        .border_color(a.focused ? t.input : "#00000000")
+        .when(a.focused, (el) => el.bg(t.selected).child(div().absolute().left(2).w(2).h(14).rounded_full().bg(spFill ?? t.foreground)))
+        .when(!a.focused, (el) => el.hover((s) => s.bg(t.hover)))
         .cursor_pointer()
-        .hover((s) => s.bg(t.hover))
         .on_hover((on, cx) => {
           if (on) this.hovered = a.address;
           else if (this.hovered === a.address) this.hovered = null;

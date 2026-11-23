@@ -657,12 +657,14 @@ export default class Spaces extends View {
 
   tabRows(w, t, ps) {
     if (!this.open.has(w.id)) return [];
+    const fill = spaceFill(w, t, shared("space.colors") ?? {});
     return (w.tabs ?? []).filter((tab) => !tab.settled).map((tab) => {
       const p = lead(tab, ps);
       const icon = tabIcon(p, t);
       const on = w.active && tab.active;
       return h_flex()
         .id(`space-tab-${tab.id}`)
+        .relative()
         .h(26)
         .flex_none()
         .pl(35)
@@ -671,11 +673,13 @@ export default class Spaces extends View {
         .items_center()
         .rounded(7)
         .text_size(12.5)
-        .when(on, (el) => el.bg(t.raised))
-        .hover((s) => s.bg(t.hover))
+        .border_1()
+        .border_color(on ? t.input : "#00000000")
+        .when(on, (el) => el.bg(t.selected).child(div().absolute().left(2).w(2).h(12).rounded_full().bg(fill)))
+        .when(!on, (el) => el.hover((s) => s.bg(t.hover)))
         .on_click(() => run("tab.select", { id: tab.id }))
         .when(Boolean(icon), (el) => el.child(icon))
-        .child(div().flex_1().min_w(0).truncate().text_color(on ? t.foreground : t.muted).child(tabName(tab, p)))
+        .child(div().flex_1().min_w(0).truncate().text_color(on ? t.foreground : t.muted).when(on, (el) => el.font_weight(500)).child(tabName(tab, p)))
         .when(Boolean(tab.status), (el) => el.child(mark(t, tab.status)));
     });
   }
