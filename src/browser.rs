@@ -7,7 +7,9 @@ use serde_json::{Value, json};
 use std::cell::Cell;
 use std::rc::Rc;
 
+pub mod icons;
 pub mod markdown;
+pub use icons::{pane_icon, site_icon};
 #[cfg(target_os = "macos")]
 pub mod cdp;
 #[cfg(target_os = "macos")]
@@ -854,6 +856,7 @@ impl Render for Browser {
                         .px(px(8.))
                         .flex()
                         .items_center()
+                        .gap(px(5.))
                         .rounded_md()
                         .cursor_pointer()
                         .hover(|s| s.bg(color("hover")))
@@ -862,6 +865,7 @@ impl Render for Browser {
                                 this.focus_page();
                             }
                         }))
+                        .child(svg().path(site_icon(&f.url)).size(px(12.)).flex_none().text_color(color("muted")))
                         .child(div().min_w_0().overflow_hidden().whitespace_nowrap().text_ellipsis().child(f.title.clone()))
                 }))
         });

@@ -148,3 +148,21 @@ test("an unnamed browser tab uses its page title or url host, while a manual nam
   expect(label({ name: "", named: false }, { mod: "native-browser", title: "", url: "about:blank" })).toBe("Browser");
   expect(label({ name: "Docs", named: true }, { mod: "native-browser", title: "Linear", url: "https://linear.app" })).toBe("Docs");
 });
+
+test("a browser tab renders its pane icon when present and falls back to the globe", () => {
+  const svgs: string[] = [];
+  const view = new (new Function(...Object.keys(values), source.replace(/^import .*;\n/gm, "").replace("export default class Tabs", "return class Tabs"))(
+    ...Object.entries(values).map(([k, v]) =>
+      k === "svg" ? (path: string) => { svgs.push(path); return element(); }
+      : k === "panes" ? () => [
+        { pane: "p1", tab: "t1", mod: "native-browser", icon: "mods/native-browser/sites/linear.svg" },
+        { pane: "p2", tab: "t2", mod: "native-browser" },
+      ]
+      : v,
+    ),
+  ))();
+  view.init();
+  view.render();
+  expect(svgs).toContain("mods/native-browser/sites/linear.svg");
+  expect(svgs).toContain("mods/native-browser/browser.svg");
+});

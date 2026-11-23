@@ -218,7 +218,7 @@ test("picker matches and labels unnamed browser tabs by page title and url", () 
     { id: "sp1", name: "work", status: "working", tabs: [{ id: "b-tab", name: "2", named: false }] },
   ];
   testPanes = [
-    { pane: "p1", tab: "b-tab", mod: "native-browser", title: "ORC-123 Linear", url: "https://linear.app/vibes/issue/ORC-123" },
+    { pane: "p1", tab: "b-tab", mod: "native-browser", title: "ORC-123 Linear", url: "https://linear.app/vibes/issue/ORC-123", icon: "mods/native-browser/sites/linear.svg" },
   ];
   view.input.value = () => "linear";
   view.input.handlers.change({}, cx);

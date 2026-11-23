@@ -592,6 +592,20 @@ test("unnamed browser tabs in spaces show their page title or url host", () => {
   expect(tabName({ name: "Custom", named: true }, { mod: "native-browser", title: "Datadog Monitor", url: "https://app.datadoghq.com" })).toBe("Custom");
 });
 
+test("browser tabs in spaces render their site icon or fall back to the globe", () => {
+  const svgs: string[] = [];
+  const el: any = new Proxy({}, { get: () => () => el });
+  const tabIcon = new Function("View", "svg", "image", `${source}; return tabIcon;`)(
+    class {},
+    (path: string) => { svgs.push(path); return el; },
+    () => el,
+  );
+  const t = new Proxy({}, { get: () => "#000000" });
+  tabIcon({ mod: "native-browser", icon: "mods/native-browser/sites/gitlab.svg" }, t);
+  tabIcon({ mod: "native-browser" }, t);
+  expect(svgs).toEqual(["mods/native-browser/sites/gitlab.svg", "mods/native-browser/browser.svg"]);
+});
+
 test("dragging tabs in spaces reorders within a space and moves across spaces on the same machine", () => {
   const ran: [string, unknown][] = [];
   const snapshot: any[] = [

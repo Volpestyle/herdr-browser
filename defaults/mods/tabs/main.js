@@ -131,7 +131,7 @@ export default class Tabs extends View {
           else run("tab.select", { id: c.id });
         })
         .on_mouse_down("right", (_e, cx) => { cx.stop_propagation(); openOverlay({ mod: "menu", kind: "popup", width: 200, props: { tab: "tab", target: { id: c.id, space: space.id } } }); })
-        .when(browser, el => el.child(svg("mods/native-browser/browser.svg").size(13).flex_none().text_color(t.muted)))
+        .when(browser, el => el.child(svg(lead?.icon || "mods/native-browser/browser.svg").size(13).flex_none().text_color(t.muted)))
         .when(pin, el => el.tooltip(name))
         .when(Boolean(program?.icon), el => el.child(program.tint ? svg(program.icon).size(14).text_color(t.muted) : image(program.icon).size(14)))
         .child(div().max_w(pin ? 110 : 170).truncate().child(c.zoomed ? `${name} Z` : name))

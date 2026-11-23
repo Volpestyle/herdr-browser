@@ -1921,7 +1921,9 @@ impl AppWindow {
                                     let url = props.get("url").and_then(Value::as_str).unwrap_or_default().to_owned();
                                     (crate::browser::url_label(&url), url)
                                 });
-                            panes.push(json!({ "pane": p.id, "terminal": null, "mod": name, "tab": ctx.id, "title": title, "url": url, "focused": focused, "zoomed": zoomed, "movable": self.pane_movable(&p.id) }));
+                            let is_markdown = props.get("markdown_path").and_then(Value::as_str).is_some();
+                            let icon = crate::browser::pane_icon(&url, is_markdown);
+                            panes.push(json!({ "pane": p.id, "terminal": null, "mod": name, "tab": ctx.id, "title": title, "url": url, "icon": icon, "focused": focused, "zoomed": zoomed, "movable": self.pane_movable(&p.id) }));
                         } else {
                             panes.push(json!({ "pane": p.id, "terminal": null, "mod": name, "tab": ctx.id, "title": name, "focused": focused, "zoomed": zoomed, "movable": self.pane_movable(&p.id) }));
                         }

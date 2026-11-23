@@ -119,25 +119,26 @@ export default class Picker extends View {
       return n;
     };
     const tabTitle = (ctx) => {
-      if (ctx.named) return { label: ctx.name, url: "" };
       const browser = ps.find((p) => p.tab === ctx.id && p.mod === "native-browser");
-      if (!browser) return { label: ctx.name, url: "" };
+      const icon = browser ? (browser.icon || "mods/native-browser/browser.svg") : null;
+      if (ctx.named) return { label: ctx.name, url: browser?.url ?? "", icon };
+      if (!browser) return { label: ctx.name, url: "", icon: null };
       const title = (browser.title ?? "").trim();
-      if (title && title !== "native-browser" && title !== "Browser") return { label: title, url: browser.url ?? "" };
+      if (title && title !== "native-browser" && title !== "Browser") return { label: title, url: browser.url ?? "", icon };
       if (browser.url) {
         try {
           const u = new URL(browser.url);
-          if (u.host) return { label: u.host.replace(/^www\./, ""), url: browser.url };
+          if (u.host) return { label: u.host.replace(/^www\./, ""), url: browser.url, icon };
         } catch {}
       }
-      return { label: "Browser", url: browser.url ?? "" };
+      return { label: "Browser", url: browser.url ?? "", icon };
     };
     const groups = spaces().map((w) => {
       const ctxs = w.tabs
         .map((ctx) => {
           const mine = all.filter((a) => a.tab === ctx.id);
-          const { label, url } = tabTitle(ctx);
-          return { w, ctx, label, url, mine, team: teamOf(mine.map((a) => a.address)) };
+          const { label, url, icon } = tabTitle(ctx);
+          return { w, ctx, label, url, icon, mine, team: teamOf(mine.map((a) => a.address)) };
         })
         .filter((c) => !f || [w.name, spaceLabel(w), w.id, c.ctx.name, c.label, c.url, ...c.mine.map((a) => a.program?.name ?? "")].join(" ").toLowerCase().includes(f));
       return { w, ctxs };
@@ -278,7 +279,7 @@ export default class Picker extends View {
         .when(on, (el) => el.bg(t.hover))
         .hover((s) => s.bg(t.hover))
         .on_click(() => this.go(r))
-        .child(this.glyph(t, r.ctx.status))
+        .child(r.ctx.status ? this.glyph(t, r.ctx.status) : r.icon ? svg(r.icon).size(12).flex_none().text_color(t.muted) : this.glyph(t, r.ctx.status))
         .child(div().flex_1().truncate().text_color(t.foreground).when(here, (d) => d.font_semibold()).child(r.label ?? r.ctx.name))
         .when(r.ctx.status === "blocked", (el) => el.child(div().text_size(11).text_color(t.blocked).child("needs you")))
         .when(r.ctx.status === "done", (el) => el.child(div().text_size(11).text_color(t.done).child("finished")))

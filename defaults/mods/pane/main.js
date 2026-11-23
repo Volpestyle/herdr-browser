@@ -68,7 +68,7 @@ export default class Pane extends View {
     const browser = p.mod === "native-browser";
     const name = ((p.program?.agent || p.program?.shell) && p.program.name) || p.title || p.program?.name || (browser ? "Browser" : "shell");
     const pic = browser
-      ? svg("mods/native-browser/browser.svg").size(13).flex_none().text_color(t.dim)
+      ? svg(p.icon || "mods/native-browser/browser.svg").size(13).flex_none().text_color(t.dim)
       : icon(p.program, 14, t.dim);
     const sub = p.cwd ? folder(p.cwd) : browser ? browserSubtitle(p.url) : "";
     const st = p.status;

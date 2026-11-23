@@ -194,7 +194,7 @@ function tabName(tab, p) {
 }
 
 function tabIcon(p, t) {
-  if (p?.mod === "native-browser") return svg("mods/native-browser/browser.svg").size(13).flex_none().text_color(t.muted);
+  if (p?.mod === "native-browser") return svg(p.icon || "mods/native-browser/browser.svg").size(13).flex_none().text_color(t.muted);
   const prog = p?.program;
   if (!prog?.icon) return null;
   return prog.tint ? svg(prog.icon).size(14).flex_none().text_color(t.foreground) : image(prog.icon).w(14).h(14).flex_none();
