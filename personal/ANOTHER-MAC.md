@@ -5,17 +5,54 @@ This build targets macOS on Apple silicon. The source is maintained in
 is maintained separately in the private `Volpestyle/dotfiles` repository under
 `config/herdr-app-browser`.
 
-## Copy the tested app
+## Push signed updates over LAN without shell access
+
+To push signed local builds (including H.264/AAC codecs) from a build Mac to
+another Mac on the same LAN without giving unattended SSH shell access:
+
+1. Generate a dedicated staging key on the build Mac (`~/.ssh/id_ed25519_herdr_stage`)
+   and add an SSH alias (`Host other-mac-stage`) using `AddressFamily inet` and
+   `IdentitiesOnly yes`. Keep any regular interactive SSH alias password-only.
+2. On the receiving Mac, install a wrapper at `~/.local/bin/herdr-browser-receive`
+   that execs `python3 ~/dev/herdr-app-browser/personal/stage_receive.py`, and add
+   the staging public key to `~/.ssh/authorized_keys` locked down with OpenSSH
+   `restrict`:
+
+```text
+restrict,from="<lan-cidr>,fe80::/10",command="/Users/<user>/.local/bin/herdr-browser-receive" ssh-ed25519 <pubkey> herdr-browser-stage-only
+```
+
+3. Push a signed bundle from the build Mac:
+
+```sh
+python3 personal/stage_push.py other-mac-stage --status    # read-only status
+python3 personal/stage_push.py other-mac-stage             # push installed app
+python3 personal/stage_push.py other-mac-stage --pending   # push freshly staged build
+```
+
+`stage_receive.py` allows only `status` and `stage` (rejecting all other commands),
+validates the tar stream against path traversal, escaping symlinks/hardlinks, and
+size limits, never executes the received binary, verifies `codesign --verify --deep --strict -R`
+against the installed app's Apple designated requirement (or a pinned requirement
+at `~/.config/herdr-browser-stage/requirement`), refuses version/Chromium downgrades,
+and stages the bundle into `state.json` without quitting the running app. Activate it
+on the receiving Mac whenever you are ready to restart:
+
+```sh
+herdr-browser-update install && open "$HOME/Applications/Herdr Browser.app"
+```
+
+## Copy the tested app manually
 
 Install ordinary [Herdr](https://herdr.dev/download/) on the new Mac first so
-herdr-core is available. Keep it alongside the custom app.
+herdr-core is available (or install a notarized stock-CEF build via
+`personal/install.sh`). Keep stock Herdr alongside the custom app.
 
-On the source Mac, the transfer archive is at
-`~/dev/herdr-app-browser/.local/transfer/Herdr-Browser-apple-silicon.zip`, with
-`SHA256SUMS` beside it. It contains the signed application only. Browser profiles,
+To transfer a local development-signed build offline (for example via AirDrop),
+archive `~/Applications/Herdr Browser.app` with `ditto -c -k --keepParent` on the
+source Mac. The archive contains the signed application only; browser profiles,
 cookies, Keychain data, running sessions and personal/work agent credentials
-remain on their original Mac. AirDrop the archive and checksum file to the
-other Mac. No public binary release is published.
+remain on their original Mac.
 
 On a Mac without Herdr Browser installed, extract the archive into
 `~/Applications`; if a copy is already installed, close that custom app and
@@ -27,10 +64,12 @@ ditto -x -k ~/Downloads/Herdr-Browser-apple-silicon.zip ~/Applications
 codesign --verify --deep --strict "$HOME/Applications/Herdr Browser.app"
 ```
 
-This build is development-signed and is not notarized for public distribution.
-macOS or the work Mac's management policy may require approval to open it.
+Local builds are development-signed and are not notarized for public distribution.
+macOS or a managed Mac's policy may require approval to open them (for a notarized
+build without proprietary H.264/AAC codecs, use a public `browser-v*` GitHub Release
+via `personal/install.sh`).
 The portable bundle selects the current account's `~/.config/herdr-app-browser`;
-it has no baked-in `/Users/james` path. Sign in to websites normally on this Mac.
+it has no baked-in user path. Sign in to websites normally on the second Mac.
 
 ## Restore the appearance and keyboard shortcuts
 
