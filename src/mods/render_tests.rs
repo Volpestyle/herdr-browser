@@ -1178,9 +1178,18 @@ fn shipped_layouts_and_keys() {
         include_str!("../../defaults/keys.macos.json"),
     ] {
         crate::keys::parse(text).unwrap();
-        let sections: BTreeMap<String, BTreeMap<String, String>> = serde_json::from_str(text).unwrap();
+        let sections: BTreeMap<String, BTreeMap<String, Value>> = serde_json::from_str(text).unwrap();
         for bindings in sections.values() {
-            for action in bindings.values() {
+            for binding in bindings.values() {
+                if let Some(obj) = binding.as_object() {
+                    let name = obj.get("command").and_then(Value::as_str).expect("object key binding command");
+                    let command = crate::commands::find(name).unwrap_or_else(|| panic!("unknown shipped key command {name}"));
+                    let args = obj.get("args").cloned().unwrap_or(Value::Null);
+                    crate::commands::validate_args(command, &args).unwrap();
+                    assert!(crate::commands::missing(command, &args).is_none(), "missing shipped key argument {name}");
+                    continue;
+                }
+                let action = binding.as_str().expect("string or object key binding");
                 let name = action.split(':').next().unwrap();
                 if let Some(command) = crate::commands::find(name) {
                     let args = match action.split_once(':') {

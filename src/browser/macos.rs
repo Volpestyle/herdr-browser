@@ -396,6 +396,14 @@ fn ctrl_shortcut(key: &str, shift: bool) -> Option<&'static str> {
         _ => None,
     }
 }
+fn ctrl_cmd_shortcut(key: &str, shift: bool) -> Option<&'static str> {
+    match (key, shift) {
+        ("[", false) => Some("tab.move:prev"),
+        ("]", false) => Some("tab.move:next"),
+        ("b", false) => Some("browser.split:right"),
+        _ => None,
+    }
+}
 fn shortcut(key: &str, shift: bool, option: bool) -> Option<&'static str> {
     if option {
         return match (key, shift) {
@@ -594,6 +602,22 @@ impl Host {
                     .unwrap_or_default();
                 if let Some(command) = ctrl_shortcut(&key, flags.contains(NSEventModifierFlags::Shift)) {
                     event_window.makeFirstResponder(Some(&event_parent));
+                    let _ = tx.try_send(Event::Command(command));
+                    return std::ptr::null_mut();
+                }
+                return event.as_ptr();
+            }
+            if flags.contains(NSEventModifierFlags::Command)
+                && flags.contains(NSEventModifierFlags::Control)
+                && !flags.contains(NSEventModifierFlags::Option)
+            {
+                let key = e
+                    .charactersIgnoringModifiers()
+                    .map(|s| s.to_string().to_lowercase())
+                    .unwrap_or_default();
+                if let Some(command) =
+                    ctrl_cmd_shortcut(&key, flags.contains(NSEventModifierFlags::Shift))
+                {
                     let _ = tx.try_send(Event::Command(command));
                     return std::ptr::null_mut();
                 }
@@ -827,7 +851,7 @@ impl Drop for Host {
 }
 #[cfg(test)]
 mod tests {
-    use super::{ctrl_shortcut, download_url, shortcut};
+    use super::{ctrl_cmd_shortcut, ctrl_shortcut, download_url, shortcut};
     #[test]
     fn download_url_allows_web_and_web_origin_blob_urls_only() {
         assert!(download_url("https://developer.apple.com/cert.cer"));
@@ -881,5 +905,12 @@ mod tests {
             keys["global"]["ctrl-shift-`"].as_str()
         );
         assert_eq!(ctrl_shortcut("~", true), Some("focus.cycle:prev"));
+        assert_eq!(ctrl_cmd_shortcut("[", false), Some("tab.move:prev"));
+        assert_eq!(ctrl_cmd_shortcut("]", false), Some("tab.move:next"));
+        assert_eq!(ctrl_cmd_shortcut("b", false), Some("browser.split:right"));
+        assert_eq!(keys["global"]["cmd-ctrl-["]["command"].as_str(), Some("tab.move"));
+        assert_eq!(keys["global"]["cmd-ctrl-["]["args"]["by"].as_i64(), Some(-1));
+        assert_eq!(keys["global"]["cmd-ctrl-]"]["command"].as_str(), Some("tab.move"));
+        assert_eq!(keys["global"]["cmd-ctrl-]"]["args"]["by"].as_i64(), Some(1));
     }
 }

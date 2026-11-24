@@ -492,6 +492,15 @@ impl Browser {
                     "browser.back" | "browser.forward" | "browser.reload" | "browser.devtools" | "browser.find"
                 ) {
                     let _ = self.command(command, &Value::Null, window, cx);
+                } else if let Some(by) = match command {
+                    "tab.move:prev" => Some(-1),
+                    "tab.move:next" => Some(1),
+                    _ => None,
+                } {
+                    crate::mods::request(crate::mods::Request::Run {
+                        name: "tab.move".into(),
+                        args: json!({ "by": by }),
+                    });
                 } else {
                     crate::mods::request(crate::mods::Request::Run {
                         name: command.into(),
