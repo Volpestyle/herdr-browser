@@ -185,6 +185,7 @@ test("dropping a dragged pane onto another tab or + runs pane.move and clears pa
   const view = new (new Function(...Object.keys(values), source.replace(/^import .*;\n/gm, "").replace("export default class Tabs", "return class Tabs"))(
     ...Object.entries(values).map(([k, v]) =>
       k === "div" || k === "h_flex" ? tracked
+      : k === "panes" ? () => [{ pane: "p1", tab: "t1" }, { pane: "p2", tab: "t1" }]
       : k === "shared" ? (key: string) => (key === "pane.drag" ? drag : null)
       : k === "setShared" ? (key: string, val: unknown) => { if (key === "pane.drag") drag = val; }
       : k === "run" ? (cmd: string, args: unknown) => ran.push([cmd, args])

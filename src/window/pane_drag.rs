@@ -114,7 +114,19 @@ impl AppWindow {
         if !d.moving && (at.x - d.down.x).abs().max((at.y - d.down.y).abs()) < settings::z(4.) {
             return;
         }
+        let was_moving = d.moving;
         d.moving = true;
+        let pane = d.pane.clone();
+        let tab = d.tab.clone();
+        if !was_moving {
+            let sp = self.model.space_of(&pane);
+            mods::set_shared("pane.drag".into(), json!({
+                "pane": pane,
+                "tab": tab,
+                "space": sp.map(|s| s.id.as_str()),
+                "machine": sp.and_then(|s| s.machine.as_deref()),
+            }));
+        }
         let target = self.pane_target(at);
         self.pane_drag.as_mut().unwrap().target = target;
         cx.notify();
@@ -122,6 +134,9 @@ impl AppWindow {
 
     pub(super) fn cancel_pane_drag(&mut self, cx: &mut Context<Self>) {
         if self.pane_drag.take().is_some() {
+            if mods::shared("pane.drag").is_some_and(|v| !v.is_null()) {
+                mods::set_shared("pane.drag".into(), Value::Null);
+            }
             cx.notify();
         }
     }
@@ -137,11 +152,17 @@ impl AppWindow {
             && let Some((target, edge)) = target
             && self.model.move_pane(&d.pane, &target, edge)
         {
+            if mods::shared("pane.drag").is_some_and(|v| !v.is_null()) {
+                mods::set_shared("pane.drag".into(), Value::Null);
+            }
             self.sync(window, cx);
+            cx.defer_in(window, |this, window, cx| this.restore_focus(window, cx));
+            cx.notify();
+            return true;
         }
         cx.defer_in(window, |this, window, cx| this.restore_focus(window, cx));
         cx.notify();
-        true
+        false
     }
 
     pub(super) fn pane_drag_layer(&self, cx: &mut Context<Self>) -> AnyElement {
@@ -159,7 +180,7 @@ impl AppWindow {
         });
         let this = cx.entity().downgrade();
         div().id("pane-drag-layer").absolute().inset_0()
-            .when(self.pane_drag.is_some(), |d| d.occlude().cursor(CursorStyle::ClosedHand))
+            .when(self.pane_drag.as_ref().is_some_and(|d| d.target.is_some()), |d| d.occlude().cursor(CursorStyle::ClosedHand))
             .children(preview).child(canvas(
             |_, _, _| {},
             move |_, _, window, _| {

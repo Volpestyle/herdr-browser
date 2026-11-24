@@ -120,6 +120,7 @@ export default class Tabs extends View {
     const pinned = shared("tabs.pinned") ?? [];
     const paneDrag = shared("pane.drag");
     const canDropPane = Boolean(paneDrag && (paneDrag.machine ?? null) === (space?.machine ?? null));
+    const canPopPane = canDropPane && panes().filter(p => p.tab === paneDrag.tab).length > 1;
     const button = (id, label, action) => div().id(id).size(26).flex_none().flex().items_center().justify_center().rounded(6).text_color(t.dim).hover(s => s.bg(t.hover).text_color(t.foreground))
       .on_mouse_down("left", stop).on_click(action).child(label);
     const item = (c, i) => {
@@ -181,7 +182,7 @@ export default class Tabs extends View {
         .on_size_change((_size, cx) => { if (active >= 0) { this.scroll.scroll_to_item(active); cx.notify(); } })
         .children(shown.map(item)))
       .child(button("tab-new", "+", () => openOverlay({ mod: "new-menu", kind: "popup", width: 250, height: 512 }))
-        .when(canDropPane, el => el.border(1).border_color(t.chrome).hover(s => s.bg(t.hover).border_color(t.accent).text_color(t.foreground))
+        .when(canPopPane, el => el.border(1).border_color(t.chrome).hover(s => s.bg(t.hover).border_color(t.accent).text_color(t.foreground))
           .on_mouse_up("left", (_e, cx) => {
             const drag = shared("pane.drag");
             if (!drag) return;

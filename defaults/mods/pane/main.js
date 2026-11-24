@@ -47,7 +47,7 @@ function browserSubtitle(url) {
 }
 
 export default class Pane extends View {
-  init() { this.hovered = false; this.pressed = null; }
+  init() { this.hovered = false; }
 
   me() {
     return panes().find((p) => p.pane === props()?.pane);
@@ -60,6 +60,7 @@ export default class Pane extends View {
       .rounded(4)
       .text_color(t.dim)
       .hover((s) => s.bg(t.hover).text_color(t.foreground))
+      .on_mouse_down("left", (_e, cx) => cx.stop_propagation())
       .on_click((_e, cx) => {
         cx.stop_propagation();
         run(command, args);
@@ -96,17 +97,13 @@ export default class Pane extends View {
       .text_size(12)
       .on_hover((hovered, cx) => {
         this.hovered = hovered;
-        if (!hovered && this.pressed) {
-          setShared("pane.drag", this.pressed);
-          this.pressed = null;
-        }
         cx.notify();
       })
-      .on_mouse_down("left", () => {
-        this.pressed = { pane, tab: p.tab, space: sp?.id ?? null, machine: sp?.machine ?? null };
+      .on_mouse_down("left", (_e, cx) => {
+        setShared("pane.drag", { pane, tab: p.tab, space: sp?.id ?? null, machine: sp?.machine ?? null });
+        cx.notify();
       })
       .on_mouse_up("left", () => {
-        this.pressed = null;
         if (shared("pane.drag")?.pane === pane) setShared("pane.drag", null);
       })
       .on_mouse_down("right", (_e, cx) => {
