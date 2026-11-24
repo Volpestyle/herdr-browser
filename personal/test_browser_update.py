@@ -376,6 +376,8 @@ class BrowserBundleTests(unittest.TestCase):
             self.assertTrue(all(isinstance(info[key], str) and info[key].strip() for key in self.required), path)
         main = plistlib.loads((bundle / 'Contents/Info.plist').read_bytes())
         self.assertEqual(main['LSEnvironment'], {'HERDR_APP_HOME': '~/.config/herdr-app-browser'})
+        self.assertEqual(main['CFBundleURLTypes'][0]['CFBundleURLSchemes'], ['http', 'https'])
+        self.assertEqual(main['CFBundleDocumentTypes'][0]['LSItemContentTypes'], ['public.html', 'public.xhtml'])
         # A damaged artifact must be refused before it reaches installation.
         with plists[1].open('rb') as file: info = plistlib.load(file)
         del info['NSBluetoothAlwaysUsageDescription']

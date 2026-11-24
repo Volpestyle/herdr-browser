@@ -104,9 +104,13 @@ fn main() {
     }
     // Anything else from a shell answers in the shell; only a bare launch opens the window.
     match args.get(1).map(String::as_str) {
-        // Already open on this home: that window comes to the front.
         None if control::raise_running() => return,
         None => {}
+        Some(s) if s.starts_with("-psn_") => {
+            if control::raise_running() {
+                return;
+            }
+        }
         Some("-h" | "--help" | "help") => return print!("{HELP}"),
         Some("--skill") => return print!("{}", include_str!("SKILL.md")),
         Some("-V" | "--version" | "version") => return println!("herdr-app {}", env!("CARGO_PKG_VERSION")),
@@ -169,10 +173,11 @@ fn main() {
         tracing::error!("Chromium unavailable: {error:#}");
     }
 
-    gpui_platform::application()
+    let app = gpui_platform::application()
         // Mods run programs already; the user's own links (dotfiles, Nix) may point out.
-        .with_assets(gpui_shell::AppAssets::new(mods::app_dir()).following_links())
-        .run(move |cx| {
+        .with_assets(gpui_shell::AppAssets::new(mods::app_dir()).following_links());
+    app.on_open_urls(dispatch_open_urls);
+    app.run(move |cx| {
             if std::env::var_os("HERDR_APP_BACKGROUND").is_some() {
                 cx.set_activation_policy(ActivationPolicy::Accessory);
             }
@@ -219,6 +224,7 @@ fn main() {
             if let Some(tx) = mods::request_sender() {
                 control::listen(tx);
             }
+            dispatch_open_urls(Vec::new());
             match core {
                 Ok(core) => open_main(core, requests, cx),
                 Err(need) => setup::open(need, requests, cx),
@@ -294,4 +300,68 @@ fn apply_staged_browser_update_on_quit() {
         .stdout(std::process::Stdio::null())
         .stderr(std::process::Stdio::null())
         .spawn();
+}
+
+static PENDING_OPEN_URLS: std::sync::Mutex<Vec<String>> = std::sync::Mutex::new(Vec::new());
+
+fn external_url_request(raw: &str) -> Option<(&'static str, serde_json::Value)> {
+    let url = raw.trim();
+    let lower = url.to_ascii_lowercase();
+    if lower.starts_with("http://") || lower.starts_with("https://") {
+        return Some(("browser.open", serde_json::json!({ "url": url, "focus": true })));
+    }
+    if lower.starts_with("file://") {
+        let path = lower.split(['?', '#']).next().unwrap_or("");
+        if path.ends_with(".md") || path.ends_with(".markdown") || path.ends_with(".mdx") {
+            return Some(("browser.markdown", serde_json::json!({ "path": url, "focus": true })));
+        }
+    }
+    None
+}
+
+fn dispatch_open_urls(urls: Vec<String>) {
+    let mut pending = PENDING_OPEN_URLS.lock().unwrap();
+    pending.extend(urls);
+    let Some(tx) = mods::request_sender() else {
+        return;
+    };
+    let ready: Vec<String> = pending.drain(..).collect();
+    drop(pending);
+    let mut opened = false;
+    for url in ready {
+        if let Some((name, args)) = external_url_request(&url) {
+            let _ = tx.try_send(mods::Request::Run { name: name.into(), args });
+            opened = true;
+        }
+    }
+    if opened {
+        let (reply, _) = std::sync::mpsc::channel();
+        let _ = tx.try_send(mods::Request::Control {
+            cmd: serde_json::json!({ "raise": true }),
+            reply,
+        });
+    }
+}
+
+#[cfg(test)]
+mod open_url_tests {
+    use super::external_url_request;
+
+    #[test]
+    fn routes_http_https_and_markdown_file_urls() {
+        assert_eq!(
+            external_url_request("https://linear.app/vibes/issue/ORC-1"),
+            Some(("browser.open", serde_json::json!({ "url": "https://linear.app/vibes/issue/ORC-1", "focus": true })))
+        );
+        assert_eq!(
+            external_url_request("HTTP://localhost:3000/test"),
+            Some(("browser.open", serde_json::json!({ "url": "HTTP://localhost:3000/test", "focus": true })))
+        );
+        assert_eq!(
+            external_url_request("file:///Users/james/README.md#top"),
+            Some(("browser.markdown", serde_json::json!({ "path": "file:///Users/james/README.md#top", "focus": true })))
+        );
+        assert_eq!(external_url_request("javascript:alert(1)"), None);
+        assert_eq!(external_url_request("file:///etc/passwd"), None);
+    }
 }

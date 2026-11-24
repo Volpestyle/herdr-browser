@@ -387,6 +387,21 @@ def package(binary, destination, version, source, patch_hash, *,
         'LSEnvironment': {'HERDR_APP_HOME': '~/.config/herdr-app-browser'},
         'HerdrBrowserPatch': patch_hash,
     }
+    if bundle_id != 'dev.james.herdr-browser.preview':
+        info['CFBundleURLTypes'] = [
+            {
+                'CFBundleURLName': 'Web site URL',
+                'CFBundleURLSchemes': ['http', 'https'],
+            },
+        ]
+        info['CFBundleDocumentTypes'] = [
+            {
+                'CFBundleTypeName': 'HTML document',
+                'CFBundleTypeRole': 'Viewer',
+                'LSItemContentTypes': ['public.html', 'public.xhtml'],
+                'LSHandlerRank': 'Alternate',
+            },
+        ]
     info.update(BROWSER_USAGE_DESCRIPTIONS)
     with (destination / 'Contents/Info.plist').open('wb') as output:
         plistlib.dump(info, output)
