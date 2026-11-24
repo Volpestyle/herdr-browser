@@ -3051,7 +3051,7 @@ impl AppWindow {
             if !args.is_object() { args = json!({}); }
             args["machine"] = json!(machine);
         }
-        if matches!(name, "space.new" | "space.close" | "space.rename" | "space.move" | "tab.new" | "tab.close" | "tab.rename" | "tab.move" | "pane.split" | "pane.close" | "pane.swap" | "terminal.keep" | "terminal.park") {
+        if matches!(name, "space.new" | "space.close" | "space.rename" | "space.move" | "tab.new" | "tab.close" | "tab.rename" | "tab.move" | "pane.split" | "pane.close" | "pane.swap" | "pane.move" | "terminal.keep" | "terminal.park") {
             let node = ["id", "space", "pane"].into_iter().find_map(|k| Self::arg(&args, k));
             let target = node.and_then(|id| self.model.space(id).or_else(|| self.model.space_of(id))).or_else(|| self.model.active_space());
             let machine = if name == "space.new" { Self::arg(&args, "machine") }
@@ -3393,6 +3393,50 @@ impl AppWindow {
                 if let Err(e) = r {
                     return self.fail(e);
                 }
+            }
+            "pane.move" => {
+                let Some(pane) = Self::owned(a, "pane").or_else(|| self.model.focused_pane()) else {
+                    return self.fail("no pane to move");
+                };
+                let axis = match Self::arg(a, "direction").unwrap_or("right") {
+                    "right" => Axis::Row,
+                    "down" => Axis::Column,
+                    other => return self.fail(format!("pane.move direction is \"right\" or \"down\", not {other:?}")),
+                };
+                let tab = Self::owned(a, "tab");
+                let space = Self::owned(a, "space");
+                let addr = self.model.address_of(&pane);
+                let dest_tab = match (tab.as_deref(), space.as_deref()) {
+                    (Some("new"), sp) | (None, sp @ Some(_)) => {
+                        match self.model.pop_pane_to_new_tab(&pane, sp) {
+                            Some(id) => id,
+                            None => return self.fail("cannot move pane to a new tab"),
+                        }
+                    }
+                    (Some(target_tab), _) => {
+                        if !self.model.move_pane_to_tab(&pane, target_tab, axis) {
+                            return self.fail(format!("cannot move pane {pane:?} into tab {target_tab:?}"));
+                        }
+                        target_tab.to_owned()
+                    }
+                    (None, None) => return self.fail("pane.move needs tab (tab id or \"new\") or space"),
+                };
+                if let Some(addr) = addr
+                    && self.live.contains_key(&addr)
+                    && let Some(dest_space) = self.model.space_of(&dest_tab)
+                {
+                    let machine = dest_space.machine.clone();
+                    let local_space = crate::mirror::local(&dest_space.id, machine.as_deref());
+                    let local_tab = crate::mirror::local(&dest_tab, machine.as_deref());
+                    let core = self.core.clone();
+                    let params = json!({ "terminal": addr, "labels": { "herdr.space": local_space, "herdr.tab": local_tab } });
+                    cx.background_executor().spawn(async move {
+                        if let Err(e) = core.call("terminal.label", params) {
+                            tracing::warn!("pane.move labels: {e:#}");
+                        }
+                    }).detach();
+                }
+                self.answer(Ok(json!({ "pane": pane, "tab": dest_tab })));
             }
             // ---- terminals
             "terminal.open" => {
@@ -5262,7 +5306,7 @@ fn swap_by(args: &Value) -> Result<SwapBy<'_>, String> {
 
 fn needs_model_pane(name: &str, args: &Value) -> bool {
     match name {
-        "pane.split" | "pane.close" | "pane.zoom" | "pane.swap" | "terminal.show" => AppWindow::arg(args, "pane").is_none(),
+        "pane.split" | "pane.close" | "pane.zoom" | "pane.swap" | "pane.move" | "terminal.show" => AppWindow::arg(args, "pane").is_none(),
         "pane.go" => true,
         "terminal.open" | "terminal.keep" => matches!(AppWindow::arg(args, "place"), Some("right" | "down")),
         _ => false,
@@ -5559,6 +5603,11 @@ impl Render for AppWindow {
                 }
             }))
             // Ctrl (Cmd) alone shows links in the pane under the pointer, focused or not.
+            .on_mouse_up(MouseButton::Left, cx.listener(|_, _, _, _| {
+                if mods::shared("pane.drag").is_some_and(|v| !v.is_null()) {
+                    mods::set_shared("pane.drag".into(), Value::Null);
+                }
+            }))
             .on_modifiers_changed(cx.listener(|this, _: &ModifiersChangedEvent, _, cx| {
                 for t in this.terms.values() {
                     if t.view.read(cx).hovered() {
@@ -5568,6 +5617,9 @@ impl Render for AppWindow {
             }))
             .capture_key_down(cx.listener(|this, ev: &KeyDownEvent, window, cx| {
                 if ev.keystroke.key == "escape" {
+                    if mods::shared("pane.drag").is_some_and(|v| !v.is_null()) {
+                        mods::set_shared("pane.drag".into(), Value::Null);
+                    }
                     if this.pane_drag.is_some() {
                         this.cancel_pane_drag(cx);
                         cx.stop_propagation();

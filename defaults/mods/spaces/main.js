@@ -744,6 +744,8 @@ export default class Spaces extends View {
     const label = spaceLabel(w);
     const tip = spaceTooltip(w, i, g, window()?.platform);
     const cur = this.hasFocus() && this.cursor === `space:${w.id}`;
+    const paneDrag = shared("pane.drag");
+    const paneSpaceTarget = Boolean(paneDrag && (paneDrag.machine ?? null) === (w.machine ?? null));
     return v_flex()
       .relative()
       .id(`space-${w.id}`)
@@ -757,7 +759,8 @@ export default class Spaces extends View {
       .border_color(cur ? t.accent : "#00000000")
       .when(cur, (el) => el.bg(alpha(t.accent, "1f")))
       .when(!cur && on, (el) => el.bg(t.selected))
-      .when(!cur && !on, (el) => el.hover((s) => s.bg(t.hover)))
+      .when(!cur && !on, (el) => el.hover((s) => paneSpaceTarget ? s.bg(t.hover).border_color(t.accent) : s.bg(t.hover)))
+      .when(!cur && on && paneSpaceTarget, (el) => el.hover((s) => s.border_color(t.accent)))
       .when(this.pressed === w.id && this.over !== w.id, (el) => el.opacity(0.5))
       .when(this.pressed !== null && this.over === w.id && this.pressed !== w.id, (el) => el.child(
         div().absolute().left(0).right(0).h(2).bg(t.accent)
@@ -789,6 +792,14 @@ export default class Spaces extends View {
         }
       })
       .on_mouse_up("left", (_e, cx) => {
+        const pDrag = shared("pane.drag");
+        if (pDrag && (pDrag.machine ?? null) === (w.machine ?? null)) {
+          cx.stop_propagation();
+          setShared("pane.drag", null);
+          run("pane.move", { pane: pDrag.pane, tab: "new", space: w.id });
+          cx.notify();
+          return;
+        }
         if (this.tabPressed) {
           const from = this.tabPressed;
           const over = this.tabOver;
@@ -848,6 +859,8 @@ export default class Spaces extends View {
       const icon = tabIcon(p, t);
       const on = w.active && tab.active;
       const cur = this.hasFocus() && this.cursor === `tab:${tab.id}`;
+      const paneDrag = shared("pane.drag");
+      const paneTabTarget = Boolean(paneDrag && (paneDrag.machine ?? null) === (w.machine ?? null) && paneDrag.tab !== tab.id);
       const myIdx = allTabs.findIndex((x) => x.id === tab.id);
       const isDragged = drag?.id === tab.id && !(this.tabOver?.kind === "tab" && this.tabOver.id === tab.id);
       const isDropTarget = Boolean(drag) && this.tabOver?.kind === "tab" && this.tabOver.id === tab.id && drag.id !== tab.id;
@@ -867,7 +880,8 @@ export default class Spaces extends View {
         .border_color(cur ? t.accent : on ? t.input : "#00000000")
         .when(cur, (el) => el.bg(alpha(t.accent, "1f")))
         .when(!cur && on, (el) => el.bg(t.selected).child(div().absolute().left(2).w(2).h(12).rounded_full().bg(fill)))
-        .when(!cur && !on, (el) => el.hover((s) => s.bg(t.hover)))
+        .when(!cur && !on, (el) => el.hover((s) => paneTabTarget ? s.bg(t.hover).border_color(t.accent) : s.bg(t.hover)))
+        .when(!cur && on && paneTabTarget, (el) => el.hover((s) => s.border_color(t.accent)))
         .when(isDragged, (el) => el.opacity(0.5))
         .when(isDropTarget, (el) => el.child(
           div().absolute().left(28).right(6).h(2).bg(t.accent)
@@ -892,6 +906,13 @@ export default class Spaces extends View {
         })
         .on_mouse_up("left", (_e, cx) => {
           cx.stop_propagation();
+          const pDrag = shared("pane.drag");
+          if (pDrag && (pDrag.machine ?? null) === (w.machine ?? null) && pDrag.tab !== tab.id) {
+            setShared("pane.drag", null);
+            run("pane.move", { pane: pDrag.pane, tab: tab.id });
+            cx.notify();
+            return;
+          }
           const from = this.tabPressed;
           const over = this.tabOver;
           this.tabPressed = null;

@@ -50,7 +50,25 @@ function pin({ id, space }) {
   run("tab.move", { id, index: tabs.filter((c) => c.id !== id && now.includes(c.id)).length + 1 });
 }
 
-function items(p, git) {
+function tabDisplayName(tab, ps) {
+  if (tab.named) return tab.name;
+  const mine = ps.filter((p) => p.tab === tab.id);
+  const lead = mine.find((p) => p.program?.agent) ?? mine.find((p) => p.focused) ?? mine[0];
+  if (lead?.mod === "native-browser") {
+    const title = (lead.title ?? "").trim();
+    if (title && title !== "native-browser" && title !== "Browser") return title;
+    if (lead.url) {
+      try {
+        const u = new URL(lead.url);
+        if (u.host) return u.host.replace(/^www\./, "");
+      } catch {}
+    }
+    return "Browser";
+  }
+  return lead?.program?.name || tab.name;
+}
+
+function items(p, git, dir = "right") {
   p = p ?? {};
   const tg = p.target ?? {};
   switch (p.tab) {
@@ -63,13 +81,27 @@ function items(p, git) {
       const toProgram = term?.labels?.["herdr.right-click"] === "program";
       // A terminal shown outside a tab (a layout terminal block, a window) has
       // no pane to split, zoom or close: its pane is the block's id.
-      const inTab = panes().some((pane) => pane.pane === tg.pane);
+      const allPanes = panes();
+      const me = allPanes.find((pane) => pane.pane === tg.pane);
+      const inTab = Boolean(me);
+      const panesInTab = me ? allPanes.filter((pane) => pane.tab === me.tab).length : 0;
+      const mySpace = me ? spaces().find((s) => (s.tabs ?? []).some((c) => c.id === me.tab)) : null;
+      const hasOtherTabs = Boolean(
+        mySpace &&
+          spaces().some(
+            (s) =>
+              (s.machine ?? null) === (mySpace.machine ?? null) &&
+              (s.tabs ?? []).some((c) => c.id !== me.tab && !c.settled),
+          ),
+      );
       return [
         ...(inTab
           ? [
               ["Split right", "pane.split", { direction: "right", pane: tg.pane }],
               ["Split down", "pane.split", { direction: "down", pane: tg.pane }],
               ["Zoom", "pane.zoom", { pane: tg.pane }],
+              ...(panesInTab > 1 ? [["Move to new tab", "pane.move", { pane: tg.pane, tab: "new" }]] : []),
+              ...(hasOtherTabs ? [["Move to tab…", "move-pane", { pane: tg.pane }]] : []),
             ]
           : []),
         ...(term
@@ -82,6 +114,27 @@ function items(p, git) {
         ...(parent ? [[`Send back to ${parent.name || parent.address}`, "terminal.park", { terminal: term.address }]] : []),
         ...(inTab ? [["Close pane", "pane.close", { pane: tg.pane }]] : []),
       ];
+    }
+    case "move-pane": {
+      const allPanes = panes();
+      const me = allPanes.find((pane) => pane.pane === tg.pane);
+      if (!me) return [];
+      const allSpaces = spaces();
+      const mySpace = allSpaces.find((s) => (s.tabs ?? []).some((c) => c.id === me.tab));
+      if (!mySpace) return [];
+      const panesInTab = allPanes.filter((pane) => pane.tab === me.tab).length;
+      const out = [];
+      if (panesInTab > 1) out.push(["New tab", "pane.move", { pane: me.pane, tab: "new", direction: dir }]);
+      const sameMachine = allSpaces.filter((s) => (s.machine ?? null) === (mySpace.machine ?? null));
+      const ordered = [mySpace, ...sameMachine.filter((s) => s.id !== mySpace.id)];
+      for (const sp of ordered) {
+        for (const tab of (sp.tabs ?? []).filter((c) => c.id !== me.tab && !c.settled)) {
+          const title = tabDisplayName(tab, allPanes);
+          const label = sp.id === mySpace.id ? title : `${sp.name} · ${title}`;
+          out.push([label, "pane.move", { pane: me.pane, tab: tab.id, direction: dir }]);
+        }
+      }
+      return out;
     }
     case "tab":
       return [
@@ -110,7 +163,7 @@ function items(p, git) {
 }
 
 function menuIcon(command) {
-  const name = command.endsWith(".close") ? "x" : command.endsWith(".rename") ? "square-pen" : command.endsWith(".new") ? "plus" : command === "worktree" ? "git-branch" : command === "pin" ? "pin" : command === "app.help" ? "terminal" : command === "app.theme" ? "settings" : command === "pane.split" ? "panel-right" : command === "pane.zoom" ? "square" : "terminal";
+  const name = command.endsWith(".close") ? "x" : command.endsWith(".rename") ? "square-pen" : command.endsWith(".new") ? "plus" : command === "worktree" ? "git-branch" : command === "pin" ? "pin" : command === "app.help" ? "terminal" : command === "app.theme" ? "settings" : command === "pane.split" || command === "pane.move" || command === "move-pane" ? "panel-right" : command === "pane.zoom" ? "square" : "terminal";
   return `mods/workspace-chrome/${name}.svg`;
 }
 
@@ -125,6 +178,7 @@ function shortcut(name, args) {
 export default class Menu extends View {
   init(_props, cx) {
     this.at = 0;
+    this.dir = "right";
     this.git = null;
     this.handle = cx.focus_handle();
     this.handle.focus();
@@ -139,10 +193,11 @@ export default class Menu extends View {
   }
 
   choose(i, cx) {
-    const it = items(props(), this.git)[i];
+    const it = items(props(), this.git, this.dir)[i];
     if (!it) return;
     closeOverlay(props()?.overlay);
     if (it[1] === "worktree") openOverlay({ mod: "worktree", kind: "dialog", ...(it[2].action === "open" ? { width: 560, height: 480 } : { width: 440, height: 260 }), props: it[2] });
+    else if (it[1] === "move-pane") openOverlay({ mod: "menu", kind: "popup", width: 260, height: 360, props: { tab: "move-pane", target: it[2] } });
     else if (it[1] === "pin") pin(it[2]);
     else run(it[1], it[2]);
   }
@@ -150,7 +205,8 @@ export default class Menu extends View {
   render(cx) {
     const t = theme();
     const p = props();
-    const list = items(p, this.git);
+    const list = items(p, this.git, this.dir);
+    const movePane = p?.tab === "move-pane";
     const spaceId = p?.tab === "space" ? p.target?.id : null;
     const rawColors = shared("space.colors");
     const currentColor = spaceId && rawColors && typeof rawColors === "object" ? rawColors[spaceId] : null;
@@ -198,13 +254,52 @@ export default class Menu extends View {
       .bg(t.popover)
       .text_size(12.8)
       .on_key_down((e, cx) => {
-        if (e.key === "down") this.at = (this.at + 1) % list.length;
-        else if (e.key === "up") this.at = (this.at + list.length - 1) % list.length;
+        if (e.key === "down" || e.key === "j") this.at = list.length ? (this.at + 1) % list.length : 0;
+        else if (e.key === "up" || e.key === "k") this.at = list.length ? (this.at + list.length - 1) % list.length : 0;
+        else if (movePane && e.key === "r") this.dir = "right";
+        else if (movePane && e.key === "d") this.dir = "down";
         else if (e.key === "enter") this.choose(this.at, cx);
         else if (e.key === "escape") closeOverlay(props().overlay);
         else return;
         cx.notify();
       })
+      .when(movePane, (el) =>
+        el.child(
+          h_flex()
+            .px(8)
+            .pt(4)
+            .pb(6)
+            .mb(3)
+            .border_b(1)
+            .border_color(t.border)
+            .items_center()
+            .justify_between()
+            .child(div().text_size(11).font_medium().text_color(t.dim).child("Move pane to tab"))
+            .child(
+              h_flex()
+                .gap(3)
+                .children(
+                  ["right", "down"].map((d) =>
+                    div()
+                      .id(`move-dir-${d}`)
+                      .px(6)
+                      .py(2)
+                      .rounded(5)
+                      .text_size(10.5)
+                      .cursor_pointer()
+                      .bg(this.dir === d ? t.selected : t.popover)
+                      .text_color(this.dir === d ? t.foreground : t.dim)
+                      .hover((s) => s.bg(t.hover).text_color(t.foreground))
+                      .on_click((_e, cx) => {
+                        this.dir = d;
+                        cx.notify();
+                      })
+                      .child(d === "right" ? "Right" : "Down"),
+                  ),
+                ),
+            ),
+        ),
+      )
       .children(
         list.map((it, i) =>
           v_flex()
@@ -223,8 +318,8 @@ export default class Menu extends View {
             .hover((s) => s.bg(t.hover))
             .on_click((_e, cx) => this.choose(i, cx))
             .child(svg(menuIcon(it[1])).size(14).flex_none().text_color(t.muted))
-            .child(div().flex_1().child(it[0]))
-            .child(div().text_size(11).text_color(t.dim).child(shortcut(it[1], it[2])))),
+            .child(div().flex_1().min_w(0).truncate().child(it[0]))
+            .child(div().text_size(11).text_color(t.dim).child(movePane ? "" : shortcut(it[1], it[2])))),
         ),
       );
   }

@@ -1,6 +1,6 @@
 import { View, div, svg, image } from "gpui-kit";
 import { h_flex, ScrollHandle } from "gpui-base";
-import { spaces, panes, run, openOverlay, theme, window, shared, layout, settings } from "herdr";
+import { spaces, panes, run, openOverlay, theme, window, shared, setShared, layout, settings } from "herdr";
 
 function find(node, id) {
   if (node?.id === id) return node;
@@ -118,6 +118,8 @@ export default class Tabs extends View {
     }
     const stop = (_e, cx) => cx.stop_propagation();
     const pinned = shared("tabs.pinned") ?? [];
+    const paneDrag = shared("pane.drag");
+    const canDropPane = Boolean(paneDrag && (paneDrag.machine ?? null) === (space?.machine ?? null));
     const button = (id, label, action) => div().id(id).size(26).flex_none().flex().items_center().justify_center().rounded(6).text_color(t.dim).hover(s => s.bg(t.hover).text_color(t.foreground))
       .on_mouse_down("left", stop).on_click(action).child(label);
     const item = (c, i) => {
@@ -125,13 +127,21 @@ export default class Tabs extends View {
       const program = lead?.program, browser = lead?.mod === "native-browser";
       const name = label(c, lead);
       const pin = pinned.includes(c.id);
+      const paneTarget = canDropPane && paneDrag.tab !== c.id;
       return h_flex().id(`tab-${c.id}`).h(29).px(pin ? 9 : 10).gap(7).rounded(7).items_center().flex_none().text_size(12.8)
         // A rename or status dot on this or an earlier tab can push the active one out.
         .when(i <= active, el => el.on_size_change((_size, cx) => { this.scroll.scroll_to_item(active); cx.notify(); }))
         .border(1).border_color(c.active ? t.border : t.chrome).bg(c.active ? t.raised : t.chrome).text_color(c.active ? t.foreground : t.muted)
-        .hover(s => s.bg(t.hover))
+        .hover(s => paneTarget ? s.bg(t.hover).border_color(t.accent) : s.bg(t.hover))
         .on_mouse_down("left", (e, cx) => { cx.stop_propagation(); this.pressed = i; if (e.click_count === 2) run("tab.rename", { id: c.id }); })
-        .on_mouse_up("left", () => {
+        .on_mouse_up("left", (_e, cx) => {
+          const drag = shared("pane.drag");
+          if (drag && (drag.machine ?? null) === (space?.machine ?? null) && drag.tab !== c.id) {
+            cx?.stop_propagation?.();
+            setShared("pane.drag", null);
+            run("pane.move", { pane: drag.pane, tab: c.id });
+            return;
+          }
           const from = this.pressed; this.pressed = null;
           if (from !== null && from !== i) run("tab.move", { id: shown[from].id, index: space.tabs.findIndex(x => x.id === c.id) + 1 });
           else run("tab.select", { id: c.id });
@@ -170,7 +180,15 @@ export default class Tabs extends View {
       .child(h_flex().id("tab-scroll").flex_1().min_w(0).h_full().items_center().gap(3).overflow_x_scrollbar().track_scroll(this.scroll)
         .on_size_change((_size, cx) => { if (active >= 0) { this.scroll.scroll_to_item(active); cx.notify(); } })
         .children(shown.map(item)))
-      .child(button("tab-new", "+", () => openOverlay({ mod: "new-menu", kind: "popup", width: 250, height: 512 })))
+      .child(button("tab-new", "+", () => openOverlay({ mod: "new-menu", kind: "popup", width: 250, height: 512 }))
+        .when(canDropPane, el => el.border(1).border_color(t.chrome).hover(s => s.bg(t.hover).border_color(t.accent).text_color(t.foreground))
+          .on_mouse_up("left", (_e, cx) => {
+            const drag = shared("pane.drag");
+            if (!drag) return;
+            cx?.stop_propagation?.();
+            setShared("pane.drag", null);
+            run("pane.move", { pane: drag.pane, tab: "new", space: space?.id });
+          })))
       .when(enabled.includes("files"), el => el.child(panelButton("files", "Files", "mods/files/file.svg")))
       .when(enabled.includes("changes"), el => el.child(panelButton("changes", "Changes", "mods/changes/changes.svg")))
       .when(w?.buttons, el => el.child(button("minimize", w.platform === "windows" ? svg("mods/tabs/win-min.svg").size(16) : "−", () => run("window.minimize")))

@@ -28,7 +28,7 @@ const values: Record<string, unknown> = {
   ScrollHandle: { new: () => ({ scroll_to_item() {} }) },
   spaces: () => [{ id: "s1", active: true, tabs: [{ id: "t1", name: "a" }, { id: "t2", name: "b", active: true }, { id: "t3", name: "c" }] }],
   panes: () => [], run(command: string) { commands.push(command); }, openOverlay() {}, theme: () => ({}),
-  window: () => null, shared: () => null, layout: () => null, settings: () => ({ zoom: 1 }),
+  window: () => null, shared: () => null, setShared() {}, layout: () => null, settings: () => ({ zoom: 1 }),
   localStorage: { getItem: (key: string) => store[key] ?? null, setItem(key: string, value: string) { store[key] = value; } },
 };
 const Tabs = new Function(...Object.keys(values), source.replace(/^import .*;\n/gm, "").replace("export default class Tabs", "return class Tabs"))(...Object.values(values));
@@ -169,4 +169,38 @@ test("a browser tab renders multicolor images, brand-tinted svgs, and globe fall
   expect(svgs.find(s => s.path === "mods/native-browser/sites/linear.svg")?.color).toBe("#5E6AD2");
   expect(imgs).toContain("mods/native-browser/sites/gitlab.svg");
   expect(svgs.some(s => s.path === "mods/native-browser/browser.svg")).toBe(true);
+});
+
+test("dropping a dragged pane onto another tab or + runs pane.move and clears pane.drag", () => {
+  const ran: [string, unknown][] = [];
+  let drag: unknown = { pane: "p1", tab: "t1", space: "s1", machine: null };
+  const byId = new Map<string, Element>();
+  const tracked = () => {
+    const el = element();
+    const orig = new Proxy(el, {
+      get: (target, key: string) => key === "id" ? (id: string) => { target.calls.id = [id]; byId.set(id, target); return orig; } : (target as any)[key],
+    });
+    return orig;
+  };
+  const view = new (new Function(...Object.keys(values), source.replace(/^import .*;\n/gm, "").replace("export default class Tabs", "return class Tabs"))(
+    ...Object.entries(values).map(([k, v]) =>
+      k === "div" || k === "h_flex" ? tracked
+      : k === "shared" ? (key: string) => (key === "pane.drag" ? drag : null)
+      : k === "setShared" ? (key: string, val: unknown) => { if (key === "pane.drag") drag = val; }
+      : k === "run" ? (cmd: string, args: unknown) => ran.push([cmd, args])
+      : v,
+    ),
+  ))();
+  view.init();
+  view.render();
+  (byId.get("tab-t2")!.calls.on_mouse_up[1] as any)({}, { stop_propagation() {} });
+  expect(drag).toBeNull();
+  expect(ran).toEqual([["pane.move", { pane: "p1", tab: "t2" }]]);
+
+  ran.length = 0;
+  drag = { pane: "p1", tab: "t1", space: "s1", machine: null };
+  view.render();
+  (byId.get("tab-new")!.calls.on_mouse_up[1] as any)({}, { stop_propagation() {} });
+  expect(drag).toBeNull();
+  expect(ran).toEqual([["pane.move", { pane: "p1", tab: "new", space: "s1" }]]);
 });

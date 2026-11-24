@@ -6,7 +6,7 @@
 
 import { View, div, svg, image } from "gpui-kit";
 import { h_flex } from "gpui-base";
-import { panes, props, run, theme, home, layout } from "herdr";
+import { panes, spaces, props, run, openOverlay, theme, home, layout, shared, setShared } from "herdr";
 
 // Match the first visible tab frame, including the active child of a stack.
 function paneFrame(node) {
@@ -47,7 +47,7 @@ function browserSubtitle(url) {
 }
 
 export default class Pane extends View {
-  init() { this.hovered = false; }
+  init() { this.hovered = false; this.pressed = null; }
 
   me() {
     return panes().find((p) => p.pane === props()?.pane);
@@ -79,6 +79,8 @@ export default class Pane extends View {
     const sub = p.cwd ? folder(p.cwd) : browser ? browserSubtitle(p.url) : "";
     const st = p.status;
     const pane = p.pane;
+    const sp = spaces().find((s) => (s.tabs ?? []).some((c) => c.id === p.tab));
+    const dragging = shared("pane.drag")?.pane === pane;
     const bottom = paneFrame(layout())?.header?.position === "bottom";
     return h_flex()
       .id(`pane-head-${pane}`)
@@ -87,11 +89,30 @@ export default class Pane extends View {
       .gap(8)
       .items_center()
       .bg(t.background)
+      .when(dragging, el => el.opacity(0.6))
       .when(bottom, el => el.border_t(1))
       .when(!bottom, el => el.border_b(1))
       .border_color(t.border)
       .text_size(12)
-      .on_hover((hovered, cx) => { this.hovered = hovered; cx.notify(); })
+      .on_hover((hovered, cx) => {
+        this.hovered = hovered;
+        if (!hovered && this.pressed) {
+          setShared("pane.drag", this.pressed);
+          this.pressed = null;
+        }
+        cx.notify();
+      })
+      .on_mouse_down("left", () => {
+        this.pressed = { pane, tab: p.tab, space: sp?.id ?? null, machine: sp?.machine ?? null };
+      })
+      .on_mouse_up("left", () => {
+        this.pressed = null;
+        if (shared("pane.drag")?.pane === pane) setShared("pane.drag", null);
+      })
+      .on_mouse_down("right", (_e, cx) => {
+        cx.stop_propagation();
+        openOverlay({ mod: "menu", kind: "popup", width: 210, props: { tab: "pane", target: { pane, terminal: p.terminal } } });
+      })
       .on_click(() => run("pane.focus", { pane }))
       .when(Boolean(pic), (el) => el.child(pic))
       .child(div().flex_none().truncate().max_w(260).font_medium().text_color(t.foreground).child(name))

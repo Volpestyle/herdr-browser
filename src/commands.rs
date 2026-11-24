@@ -85,6 +85,7 @@ pub const COMMANDS: &[Command] = &[
     cmd("pane.go", &[req("direction")], "Focus the pane or focusable mod to the \"left\", \"right\", \"up\" or \"down\"."),
     cmd("focus.cycle", &[opt("direction")], "Cycle keyboard focus between the active pane and focusable areas (spaces, agents): \"next\" (default), \"prev\", or \"pane\"."),
     cmd("pane.swap", &[opt("direction"), opt("pane"), opt("target")], "Swap a pane (default: the focused one) with its neighbor in a direction, or with another pane of its tab (target). Give exactly one of direction or target."),
+    cmd("pane.move", &[opt("pane"), opt("tab"), opt("space"), opt("direction")], "Move a pane (default: the focused one) into another tab (`tab` id, splitting \"right\" or \"down\", default \"right\"), or break it out into a new tab (`tab: \"new\"`, optional `space` on the same machine)."),
     cmd("terminal.peek", &[req("terminal")], "Peek at a running terminal over the tab, with keep-as-tab and close controls."),
     cmd("terminal.show", &[opt("terminal"), opt("pane")], "Show a terminal in a pane for now, in place of its own (no terminal: back)."),
     cmd("terminal.select_all", &[opt("terminal")], "Select a terminal's whole screen and scrollback (default: the focused one), ready to copy. On the alternate screen, select only that screen."),

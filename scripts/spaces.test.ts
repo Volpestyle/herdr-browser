@@ -764,3 +764,56 @@ test("spaces keyboard navigation supports j/k/h/l, enter, esc, and lets ctrl-` b
   view.handleKey({ key: "escape" }, cx);
   expect(ran).toEqual([["focus.cycle", { direction: "pane" }]]);
 });
+
+test("dropping a dragged pane onto a tab or space row in spaces runs pane.move", () => {
+  const ran: [string, unknown][] = [];
+  let drag: unknown = { pane: "p1", tab: "t1", space: "s1", machine: null };
+  const snapshot: any[] = [
+    { id: "s1", name: "general", folder: "/a", active: true, tabs: [{ id: "t1", name: "one" }, { id: "t2", name: "two" }] },
+    { id: "s2", name: "api", folder: "/b", active: false, tabs: [{ id: "t3", name: "three" }] },
+  ];
+  const byId = new Map<string, Record<string, (...args: any[]) => void>>();
+  const makeEl = (): any => {
+    const handlers: Record<string, (...args: any[]) => void> = {};
+    const proxy: any = new Proxy({}, {
+      get: (_, method) => (...args: any[]) => {
+        if (method === "id") byId.set(String(args[0]), handlers);
+        else if (method === "when") { if (args[0]) args[1](proxy); }
+        else if (String(method).startsWith("on_")) {
+          const key = method === "on_mouse_down" || method === "on_mouse_up" ? `${String(method)}:${args[0]}` : String(method);
+          handlers[key] = args.at(-1);
+        }
+        return proxy;
+      },
+    });
+    return proxy;
+  };
+  const Spaces = new Function("View", "hc", "localStorage", "spaces", "panes", "focused", "run", "openOverlay", "v_flex", "h_flex", "div", "svg", "image", "shared", "machines", "exec", "window", "watchFolder", "ScrollHandle", "theme", "layout", "setShared", `${source}; return Spaces;`)(
+    class {}, async () => ({ code: 0, stdout: "{}", stderr: "" }),
+    { setItem() {}, getItem: () => null },
+    () => snapshot, () => [], () => null,
+    (name: string, args: unknown) => ran.push([name, args]),
+    () => {}, makeEl, makeEl, makeEl, makeEl, makeEl,
+    (key: string) => (key === "pane.drag" ? drag : null),
+    () => [{ name: null, layout: "ready" }], undefined, () => ({ active: true }), undefined,
+    { new: () => ({ scroll_to_item() {} }) },
+    () => new Proxy({}, { get: () => "#000000" }), () => null,
+    (key: string, val: unknown) => { if (key === "pane.drag") drag = val; },
+  );
+  const view = new Spaces();
+  Object.assign(view, { git: {}, checked: {}, unsure: new Set(), watching: new Map(), folded: new Set(), open: new Set(["s1", "s2"]), shown: new Set(["s1", "s2"]), born: {}, machines: [], reconnecting: {} });
+  const cx = { stop_propagation() {}, notify() {} };
+  const t = new Proxy({}, { get: () => "#000000" });
+
+  view.tabRows(snapshot[0], t, []);
+  byId.get("space-tab-t2")!["on_mouse_up:left"]({}, cx);
+  expect(drag).toBeNull();
+  expect(ran).toEqual([["pane.move", { pane: "p1", tab: "t2" }]]);
+
+  ran.length = 0;
+  drag = { pane: "p1", tab: "t1", space: "s1", machine: null };
+  view.row({ w: snapshot[1], i: 1, g: null, tree: null }, t);
+  byId.get("space-s2")!["on_mouse_up:left"]({}, cx);
+  expect(drag).toBeNull();
+  expect(ran).toEqual([["pane.move", { pane: "p1", tab: "new", space: "s2" }]]);
+});

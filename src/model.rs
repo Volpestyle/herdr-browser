@@ -427,6 +427,92 @@ impl Model {
         true
     }
 
+    fn detach_pane(&mut self, pane_id: &str) -> Option<Node> {
+        let c = self.tab_of_mut(pane_id)?;
+        let mut node = c.root.remove(pane_id)?;
+        node.size = None;
+        if c.zoomed.as_deref() == Some(pane_id) {
+            c.zoomed = None;
+        }
+        if !c.root.panes().is_empty() {
+            c.before.retain(|p| p != pane_id);
+            if c.focused.as_deref() == Some(pane_id) {
+                let here: Vec<String> = c.root.panes().iter().map(|n| n.id.clone()).collect();
+                c.before.retain(|p| here.contains(p));
+                c.focused = c.before.pop().or_else(|| here.first().cloned());
+            }
+        } else {
+            let tab_id = c.id.clone();
+            self.remove_tab(&tab_id);
+        }
+        Some(node)
+    }
+
+    pub fn move_pane_to_tab(&mut self, pane_id: &str, target_tab_id: &str, axis: Axis) -> bool {
+        let Some(from_space) = self.space_of(pane_id) else { return false };
+        let Some(from_tab) = self.tab_of(pane_id) else { return false };
+        if !from_tab.root.find(pane_id).is_some_and(Node::is_pane) || from_tab.id == target_tab_id {
+            return false;
+        }
+        let Some(to_space) = self.spaces.iter().find(|s| s.tab(target_tab_id).is_some()) else {
+            return false;
+        };
+        if from_space.machine != to_space.machine {
+            return false;
+        }
+        let machine = to_space.machine.clone();
+        let target_space_id = to_space.id.clone();
+        let Some(node) = self.detach_pane(pane_id) else { return false };
+        let container = self.fresh_id_on("s", machine.as_deref());
+        let Some(target_tab) = self.tab_mut(target_tab_id) else { return false };
+        let Some(anchor) = target_tab.focused_pane() else { return false };
+        if !target_tab.root.split(&anchor, axis, node, container) {
+            return false;
+        }
+        target_tab.zoomed = None;
+        target_tab.settled = None;
+        target_tab.focus(pane_id);
+        if let Some(sp) = self.space_mut(&target_space_id) {
+            sp.select(target_tab_id);
+        }
+        self.active = Some(target_space_id);
+        true
+    }
+
+    pub fn pop_pane_to_new_tab(&mut self, pane_id: &str, target_space_id: Option<&str>) -> Option<String> {
+        let from_space = self.space_of(pane_id)?;
+        let from_tab = self.tab_of(pane_id)?;
+        if !from_tab.root.find(pane_id).is_some_and(Node::is_pane) {
+            return None;
+        }
+        let from_space_id = from_space.id.clone();
+        let from_tab_id = from_tab.id.clone();
+        let from_panes = from_tab.root.panes().len();
+        let from_machine = from_space.machine.clone();
+        let dest_space_id = target_space_id.unwrap_or(&from_space_id).to_owned();
+        let dest_space = self.space(&dest_space_id)?;
+        if dest_space.machine != from_machine {
+            return None;
+        }
+        if dest_space_id == from_space_id && from_panes <= 1 {
+            return None;
+        }
+        let from_ci = self.space(&from_space_id)?.tabs.iter().position(|c| c.id == from_tab_id)?;
+        let new_tab_id = self.fresh_id_on("tb", from_machine.as_deref());
+        let node = self.detach_pane(pane_id)?;
+        let tab = Tab::with_pane(&new_tab_id, "", node);
+        let sp = self.space_mut(&dest_space_id)?;
+        let at = if dest_space_id == from_space_id {
+            (from_ci + 1).min(sp.tabs.len())
+        } else {
+            sp.tabs.len()
+        };
+        sp.tabs.insert(at, tab);
+        sp.active = Some(new_tab_id.clone());
+        self.active = Some(dest_space_id);
+        Some(new_tab_id)
+    }
+
     pub fn swap_panes(&mut self, pane: &str, target: &str) -> Result<(), String> {
         let is_pane = |m: &Model, id: &str| m.tab_of(id).and_then(|c| c.root.find(id)).is_some_and(Node::is_pane);
         if !is_pane(self, pane) {
@@ -848,6 +934,40 @@ mod tests {
         assert!(m.move_tab_to_space("c1", "s2", None));
         assert!(m.space("s1").is_none());
         assert_eq!(m.space("s2").unwrap().tabs.iter().map(|c| c.id.as_str()).collect::<Vec<_>>(), ["c2", "c3", "c1"]);
+    }
+
+    #[test]
+    fn move_pane_to_tab_and_pop_to_new_tab() {
+        let mut m = Model::default();
+        m.add_space("s1", "a", "/a", Tab::new("c1", "one", "p1", "t1"));
+        m.split("p1", Axis::Row, "p2", "t2");
+        m.add_tab("s1", Tab::new("c2", "two", "p3", "t3"));
+        m.add_space("s2", "b", "/b", Tab::new("c3", "three", "p4", "t4"));
+        m.add_space("s3", "remote", "/r", Tab::new("c4", "four", "p5", "r/t5"));
+        m.space_mut("s3").unwrap().machine = Some("cloud".into());
+
+        assert!(!m.move_pane_to_tab("p2", "c1", Axis::Row));
+        assert!(!m.move_pane_to_tab("p2", "c4", Axis::Row));
+
+        assert!(m.move_pane_to_tab("p2", "c2", Axis::Row));
+        assert_eq!(m.tab("c1").unwrap().root.panes().len(), 1);
+        assert_eq!(m.tab("c2").unwrap().root.panes().len(), 2);
+        assert_eq!(m.tab("c2").unwrap().focused_pane().as_deref(), Some("p2"));
+        assert_eq!(m.active_tab().unwrap().id, "c2");
+
+        let popped = m.pop_pane_to_new_tab("p2", None).unwrap();
+        assert_eq!(m.tab("c2").unwrap().root.panes().len(), 1);
+        assert_eq!(m.tab(&popped).unwrap().root.panes().len(), 1);
+        assert_eq!(m.tab(&popped).unwrap().focused_pane().as_deref(), Some("p2"));
+        assert_eq!(m.active_tab().unwrap().id, popped);
+
+        assert!(m.pop_pane_to_new_tab("p2", None).is_none());
+        assert!(m.pop_pane_to_new_tab("p2", Some("s3")).is_none());
+
+        assert!(m.move_pane_to_tab("p2", "c3", Axis::Column));
+        assert!(m.tab(&popped).is_none());
+        assert_eq!(m.tab("c3").unwrap().root.panes().len(), 2);
+        assert_eq!(m.active.as_deref(), Some("s2"));
     }
 
     #[test]
