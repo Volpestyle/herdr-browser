@@ -340,6 +340,14 @@ mod tests {
         }
         assert!(Keystroke::parse("cmd-shift-]").unwrap().unshifted_key.is_none());
         assert!(Keystroke::default().unshifted_key.is_none());
+        for (base, shifted) in [("`", "~")] {
+            let event = Keystroke {
+                unshifted_key: Some(base.into()),
+                ..Keystroke::parse(&format!("ctrl-{shifted}")).unwrap()
+            };
+            assert!(bindings.iter().any(|binding| binding.match_keystrokes(&[event.clone()]) == Some(false)));
+        }
+        assert!(bindings.iter().any(|binding| binding.match_keystrokes(&[Keystroke::parse("ctrl-`").unwrap()]) == Some(false)));
     }
 
     #[cfg(target_os = "linux")]

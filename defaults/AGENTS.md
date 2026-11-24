@@ -598,7 +598,9 @@ The main ones:
 - Panes: `pane.split {direction: "right" | "down", pane?, argv? | mod?, props?}` (a new
   terminal, or a mod pane), `pane.close {pane?}`,
   `pane.zoom {pane?}`, `pane.focus {pane | terminal}`, `pane.go {direction}`,
-  `pane.swap {pane?, direction | target}`.
+  `pane.swap {pane?, direction | target}`, `focus.cycle {direction?: "next" | "prev" | "pane"}`.
+  `focus.cycle` (default `Ctrl+\`` / `Ctrl+Shift+\``) cycles keyboard focus between the active pane
+  and visible focusable areas (`spaces`, `agents`), revealing a hidden sidebar if needed; `direction: "pane"` returns focus to the active pane.
   `pane.zoom` also makes the pane its tab's focused one (the tab isn't
   selected); on the zoomed pane it unzooms and focus stays.
   `pane.go` prefers the most recently focused pane along the nearest edge in that

@@ -710,3 +710,57 @@ test("dragging tabs in spaces reorders within a space and moves across spaces on
   byId.get("space-tab-t5")!["on_mouse_up:left"]({}, cx);
   expect(ran).toEqual([]);
 });
+
+test("spaces keyboard navigation supports j/k/h/l, enter, esc, and lets ctrl-` bubble", () => {
+  const ran: [string, unknown][] = [];
+  const snapshot: any[] = [
+    { id: "s1", name: "general", folder: "/a", active: true, tabs: [{ id: "t1", name: "one", active: true }, { id: "t2", name: "two" }] },
+    { id: "s2", name: "api", folder: "/b", active: false, tabs: [{ id: "t3", name: "three" }] },
+  ];
+  const makeEl = (): any => new Proxy({}, { get: () => () => makeEl() });
+  const Spaces = new Function("View", "hc", "localStorage", "spaces", "panes", "focused", "run", "openOverlay", "v_flex", "h_flex", "div", "svg", "image", "shared", "machines", "exec", "window", "watchFolder", "ScrollHandle", "theme", "layout", "setShared", `${source}; return Spaces;`)(
+    class {}, async () => ({ code: 0, stdout: "{}", stderr: "" }),
+    { setItem() {}, getItem: () => null },
+    () => snapshot, () => [], () => ({ block: "spaces" }),
+    (name: string, args: unknown) => ran.push([name, args]),
+    () => {}, makeEl, makeEl, makeEl, makeEl, makeEl,
+    () => null, () => [{ name: null, layout: "ready" }], undefined, () => ({ active: true }), undefined,
+    { new: () => ({ scroll_to_item() {} }) },
+    () => new Proxy({}, { get: () => "#000000" }), () => null, () => {},
+  );
+  const view = new Spaces();
+  Object.assign(view, { git: {}, checked: {}, unsure: new Set(), watching: new Map(), folded: new Set(), open: new Set(), shown: new Set(["s1", "s2"]), born: {}, machines: [], reconnecting: {}, scroll: { scroll_to_item() {} } });
+  let stopped = 0;
+  const cx = { stop_propagation() { stopped++; }, notify() {} };
+  const t = new Proxy({}, { get: () => "#000000" });
+
+  // Ctrl+` must not be stopped so global focus.cycle handles it
+  view.grouped(t, false);
+  view.cursor = view.initialCursor();
+  expect(view.cursor).toBe("space:s1");
+  view.handleKey({ key: "`", modifiers: { control: true } }, cx);
+  expect(stopped).toBe(0);
+
+  // l expands s1, second l steps into t1, j moves to t2, enter selects t2 + returns to pane
+  view.handleKey({ key: "l" }, cx);
+  expect(view.open.has("s1")).toBe(true);
+  view.grouped(t, false);
+  view.handleKey({ key: "l" }, cx);
+  expect(view.cursor).toBe("tab:t1");
+  view.handleKey({ key: "j" }, cx);
+  expect(view.cursor).toBe("tab:t2");
+  view.handleKey({ key: "enter" }, cx);
+  expect(ran).toEqual([["tab.select", { id: "t2" }], ["focus.cycle", { direction: "pane" }]]);
+
+  // h from tab jumps to parent space, second h collapses it, j moves to s2, esc returns to pane
+  ran.length = 0;
+  view.handleKey({ key: "h" }, cx);
+  expect(view.cursor).toBe("space:s1");
+  view.handleKey({ key: "h" }, cx);
+  expect(view.open.has("s1")).toBe(false);
+  view.grouped(t, false);
+  view.handleKey({ key: "j" }, cx);
+  expect(view.cursor).toBe("space:s2");
+  view.handleKey({ key: "escape" }, cx);
+  expect(ran).toEqual([["focus.cycle", { direction: "pane" }]]);
+});

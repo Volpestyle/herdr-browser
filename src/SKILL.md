@@ -144,7 +144,7 @@ those files or the generated guide. The app rewrites them on start.
   needed, and the app does not read the TUI's config.toml.
 - Mods live in `mods/<name>/` with `main.js` and optional `mod.json`.
   They are trusted JavaScript with command and network access.
-  `"focusable": true` in `mod.json` lets `pane.go` move onto a copy; it receives
+  `"focusable": true` in `mod.json` lets `pane.go` and `focus.cycle` (`Ctrl+\`` / `Ctrl+Shift+\``) move onto a copy; it receives
   `"focus"` from `nextCommand()` and focuses its own keyboard handle.
 - A mod's `watchFolder(dir)` promise has `cancel()`; cancel it when the folder
   is no longer shown. It resolves with `[]` and releases only that call.

@@ -389,6 +389,13 @@ fn focused(container: &NSView, window: &NSWindow) -> bool {
     }
     false
 }
+fn ctrl_shortcut(key: &str, shift: bool) -> Option<&'static str> {
+    match (key, shift) {
+        ("`" | "~", false) => Some("focus.cycle"),
+        ("`" | "~", true) => Some("focus.cycle:prev"),
+        _ => None,
+    }
+}
 fn shortcut(key: &str, shift: bool, option: bool) -> Option<&'static str> {
     if option {
         return match (key, shift) {
@@ -576,6 +583,21 @@ impl Host {
                     responder.keyDown(e);
                     return std::ptr::null_mut();
                 }
+            }
+            if flags.contains(NSEventModifierFlags::Control)
+                && !flags.contains(NSEventModifierFlags::Command)
+                && !flags.contains(NSEventModifierFlags::Option)
+            {
+                let key = e
+                    .charactersIgnoringModifiers()
+                    .map(|s| s.to_string())
+                    .unwrap_or_default();
+                if let Some(command) = ctrl_shortcut(&key, flags.contains(NSEventModifierFlags::Shift)) {
+                    event_window.makeFirstResponder(Some(&event_parent));
+                    let _ = tx.try_send(Event::Command(command));
+                    return std::ptr::null_mut();
+                }
+                return event.as_ptr();
             }
             if !flags.contains(NSEventModifierFlags::Command)
                 || flags.contains(NSEventModifierFlags::Control)
@@ -805,7 +827,7 @@ impl Drop for Host {
 }
 #[cfg(test)]
 mod tests {
-    use super::{download_url, shortcut};
+    use super::{ctrl_shortcut, download_url, shortcut};
     #[test]
     fn download_url_allows_web_and_web_origin_blob_urls_only() {
         assert!(download_url("https://developer.apple.com/cert.cer"));
@@ -850,5 +872,14 @@ mod tests {
         );
         assert_eq!(shortcut("f", false, false), Some("browser.find"));
         assert_eq!(shortcut("l", false, true), None);
+        assert_eq!(
+            ctrl_shortcut("`", false),
+            keys["global"]["ctrl-`"].as_str()
+        );
+        assert_eq!(
+            ctrl_shortcut("`", true),
+            keys["global"]["ctrl-shift-`"].as_str()
+        );
+        assert_eq!(ctrl_shortcut("~", true), Some("focus.cycle:prev"));
     }
 }

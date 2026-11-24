@@ -306,3 +306,51 @@ for (const sort of ["priority", "grouped"]) test(`${sort}: Clankie spaces show t
   expect(text).toContain("core");
   expect(text).not.toContain("wt-kira-1bb4b2");
 });
+
+test("agents keyboard navigation supports j/k/h/l, enter, pin, esc, and lets ctrl-` bubble", () => {
+  const program = { name: "Claude", key: "claude", agent: true };
+  const list = [
+    { address: "t1", pane: "p1", tab: "tab1", space: "s1", space_name: "Project", program, title: "Task 1", status: "working", seq: 1, pinned: false },
+  ];
+  const terms = [
+    { address: "t1", parent: null, state: "live", status: "working", program, labels: {} },
+    { address: "t2", parent: "t1", state: "live", status: "working", program, labels: {} },
+  ];
+  const { agents, writes } = harness([], {
+    agents: () => list,
+    terminals: () => terms,
+    panes: () => [{ tab: "tab1", terminal: "t1", program, title: "Task 1" }],
+    focused: () => ({ block: "agents", agent: "t1" }),
+    spaces: () => [{ id: "s1", name: "Project", tabs: [{ id: "tab1", name: "1", named: false }] }],
+    layout: () => ({ id: "sidebar", size: { px: 268 } }),
+    shared: () => "priority",
+    theme: () => ({}),
+    setAgentOrder() {},
+    div: element, v_flex: element, h_flex: element, svg: element, image: element,
+  });
+  let stopped = 0;
+  const cx = { stop_propagation() { stopped++; }, notify() {} };
+  agents.render({});
+  agents.cursor = agents.initialCursor();
+  expect(agents.cursor).toBe("ag:t1");
+
+  // Ctrl+` bubbles to global focus.cycle
+  agents.handleKey({ key: "`", modifiers: { control: true } }, cx);
+  expect(stopped).toBe(0);
+
+  // p pins agent, l steps into sub-agent t2, h returns to t1, h again folds sub-agents, enter focuses pane
+  agents.handleKey({ key: "p" }, cx);
+  expect(writes).toContainEqual(["terminal.pin", { terminal: "t1", pinned: true }]);
+  agents.handleKey({ key: "l" }, cx);
+  expect(agents.cursor).toBe("sub:t2");
+  agents.handleKey({ key: "h" }, cx);
+  expect(agents.cursor).toBe("ag:t1");
+  agents.handleKey({ key: "h" }, cx);
+  expect(agents.folded.has("t1")).toBe(true);
+  writes.length = 0;
+  agents.handleKey({ key: "enter" }, cx);
+  expect(writes).toEqual([["pane.focus", { pane: "p1" }], ["focus.cycle", { direction: "pane" }]]);
+  writes.length = 0;
+  agents.handleKey({ key: "escape" }, cx);
+  expect(writes).toEqual([["focus.cycle", { direction: "pane" }]]);
+});

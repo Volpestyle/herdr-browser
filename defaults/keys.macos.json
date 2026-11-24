@@ -36,6 +36,8 @@
     "cmd-/": "app.help",
     "cmd-shift-/": "app.help",
     "cmd-b": "layout.toggle:sidebar",
+    "ctrl-`": "focus.cycle",
+    "ctrl-shift-`": "focus.cycle:prev",
     "cmd-f": "terminal.search",
     "cmd-alt-b": "browser.open",
     "cmd-ctrl-b": "browser.split:right",

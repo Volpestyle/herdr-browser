@@ -1,8 +1,8 @@
 // Agents in grouped or priority views; parents take their most urgent sub-agent's place.
 
 import { View, div, image, svg } from "gpui-kit";
-import { v_flex, h_flex } from "gpui-base";
-import { agents, terminals, panes, focused, spaces, run, theme, shared, setShared, setAgentOrder, openOverlay, closeOverlay, props, window, layout } from "herdr";
+import { v_flex, h_flex, ScrollHandle } from "gpui-base";
+import { agents, terminals, panes, focused, spaces, nextCommand, run, theme, shared, setShared, setAgentOrder, openOverlay, closeOverlay, props, window, layout } from "herdr";
 
 function find(node, id) {
   if (node?.id === id) return node;
@@ -75,6 +75,12 @@ function duration(ms) {
 const MARK = { ansi6: "#22a99a", ansi3: "#e3814f", ansi4: "#5b8def", ansi5: "#8b7cf6", ansi2: "#3fae6a", ansi1: "#d9649a" };
 const PROJECT_COLORS = ["ansi6", "ansi3", "ansi4", "ansi5", "ansi2", "ansi1"];
 
+function alpha(color, aa) {
+  if (typeof color !== "string" || !color.startsWith("#")) return color;
+  const base = color.length === 9 ? color.slice(0, 7) : color;
+  return base.length === 7 ? base + aa : color;
+}
+
 const isClankie = (w) => Boolean(w?.id?.startsWith("clankie-"));
 
 function spaceLabel(w) {
@@ -137,6 +143,10 @@ export default class Agents extends View {
   init(_props, cx) {
     if (props()?.sortMenu) return;
     this.folded = new Set();
+    this.focus = cx?.focus_handle?.() ?? null;
+    this.scroll = typeof ScrollHandle !== "undefined" ? ScrollHandle.new() : null;
+    this.cursor = null;
+    this.nav = [];
     // Each agent's last state and when it changed (ms), kept across restarts.
     try { this.changed = JSON.parse(localStorage.getItem("changed") ?? "{}"); } catch { this.changed = {}; }
     if (!this.changed || typeof this.changed !== "object" || Array.isArray(this.changed)) this.changed = {};
@@ -144,7 +154,134 @@ export default class Agents extends View {
     if (!Array.isArray(this.pendingPins)) this.pendingPins = [];
     if (!this.pendingPins.length) localStorage.removeItem("pins");
     this.migratingPins = new Set();
+    if (this.focus && typeof nextCommand === "function" && cx?.spawn) {
+      cx.spawn(async (cx) => {
+        for (;;) {
+          const cmd = await nextCommand();
+          if (cmd === "focus") {
+            this.focus.focus();
+            this.cursor = this.initialCursor();
+            const item = this.nav.find((n) => n.key === this.cursor);
+            if (item && this.scroll) this.scroll.scroll_to_item(item.rowIndex);
+            cx.notify();
+          }
+        }
+      });
+    }
     cx.timer.every(30000, (cx) => cx.notify());
+  }
+
+  hasFocus() {
+    return typeof focused === "function" && focused()?.block === "agents";
+  }
+
+  initialCursor() {
+    const shown = typeof focused === "function" ? focused()?.agent : null;
+    if (shown && this.nav.some((n) => n.key === `ag:${shown}`)) return `ag:${shown}`;
+    return this.nav.find((n) => n.kind === "agent")?.key ?? this.nav[0]?.key ?? null;
+  }
+
+  selectCursor(key, cx) {
+    this.cursor = key;
+    const item = this.nav.find((n) => n.key === key);
+    if (item && this.scroll) this.scroll.scroll_to_item(item.rowIndex);
+    cx.notify();
+  }
+
+  handleKey(e, cx) {
+    const m = e.modifiers ?? {};
+    if (m.control || m.platform || m.alt) return;
+    const k = e.key;
+    if (k === "escape") {
+      cx.stop_propagation();
+      run("focus.cycle", { direction: "pane" });
+      return;
+    }
+    if (!this.nav.length) return;
+    let idx = this.nav.findIndex((n) => n.key === this.cursor);
+    if (idx < 0) {
+      const init = this.initialCursor();
+      idx = Math.max(0, this.nav.findIndex((n) => n.key === init));
+    }
+    const item = this.nav[idx];
+    const activate = () => {
+      if (item.kind === "agent") {
+        run("pane.focus", { pane: item.agent.pane });
+        run("focus.cycle", { direction: "pane" });
+      } else if (item.kind === "sub") {
+        if (this.listed?.has(item.sub.address)) {
+          run("pane.focus", { terminal: item.sub.address });
+          run("focus.cycle", { direction: "pane" });
+        } else {
+          this.peek(item.sub.address);
+        }
+      }
+    };
+    if (k === "j" || k === "down") {
+      cx.stop_propagation();
+      this.selectCursor(this.nav[Math.min(this.nav.length - 1, idx + 1)].key, cx);
+    } else if (k === "k" || k === "up") {
+      cx.stop_propagation();
+      this.selectCursor(this.nav[Math.max(0, idx - 1)].key, cx);
+    } else if (k === "g") {
+      cx.stop_propagation();
+      const target = m.shift ? this.nav[this.nav.length - 1] : this.nav[0];
+      this.selectCursor(target.key, cx);
+    } else if (k === "l" || k === "right") {
+      cx.stop_propagation();
+      if (item.kind === "group") {
+        if (this.folded.has(item.groupId)) {
+          this.folded.delete(item.groupId);
+          cx.notify();
+        } else if (this.nav[idx + 1]?.groupId === item.groupId) {
+          this.selectCursor(this.nav[idx + 1].key, cx);
+        }
+      } else if (item.kind === "agent" && item.subs > 0) {
+        if (this.folded.has(item.agent.address)) {
+          this.folded.delete(item.agent.address);
+          cx.notify();
+        } else if (this.nav[idx + 1]?.parent === item.agent.address) {
+          this.selectCursor(this.nav[idx + 1].key, cx);
+        }
+      } else {
+        activate();
+      }
+    } else if (k === "h" || k === "left") {
+      cx.stop_propagation();
+      if (item.kind === "sub" && item.parent) {
+        this.selectCursor(`ag:${item.parent}`, cx);
+      } else if (item.kind === "agent") {
+        if (item.subs > 0 && !this.folded.has(item.agent.address)) {
+          this.folded.add(item.agent.address);
+          cx.notify();
+        } else if (item.groupId && this.nav.some((n) => n.key === `grp:${item.groupId}`)) {
+          this.selectCursor(`grp:${item.groupId}`, cx);
+        }
+      } else if (item.kind === "group" && !this.folded.has(item.groupId)) {
+        this.folded.add(item.groupId);
+        cx.notify();
+      }
+    } else if (k === " " || k === "space") {
+      cx.stop_propagation();
+      if (item.kind === "group") {
+        this.folded.has(item.groupId) ? this.folded.delete(item.groupId) : this.folded.add(item.groupId);
+        cx.notify();
+      } else if (item.kind === "agent" && item.subs > 0) {
+        this.folded.has(item.agent.address) ? this.folded.delete(item.agent.address) : this.folded.add(item.agent.address);
+        cx.notify();
+      }
+    } else if (k === "enter") {
+      cx.stop_propagation();
+      if (item.kind === "group") {
+        this.folded.has(item.groupId) ? this.folded.delete(item.groupId) : this.folded.add(item.groupId);
+        cx.notify();
+      } else {
+        activate();
+      }
+    } else if (k === "p" && item.kind === "agent") {
+      cx.stop_propagation();
+      run("terminal.pin", { terminal: item.agent.address, pinned: !item.agent.pinned });
+    }
   }
 
   // Stamps agents whose state changed. Done and idle count as one: looking at a
@@ -239,6 +376,7 @@ export default class Agents extends View {
     const st = kidStatus(k, this.listed);
     const pic = icon(k.program, 14, t.foreground);
     const on = k.address === shown;
+    const cur = this.hasFocus() && this.cursor === `sub:${k.address}`;
     return h_flex()
       .id(`sub-${k.address}`)
       .relative()
@@ -251,9 +389,10 @@ export default class Agents extends View {
       .items_center()
       .text_size(12.5)
       .border_1()
-      .border_color(on ? t.input : "#00000000")
-      .when(on, (el) => el.bg(t.selected).child(div().absolute().left(2).w(2).h(12).rounded_full().bg(accent ?? t.foreground)))
-      .when(!on, (el) => el.hover((s) => s.bg(t.hover)))
+      .border_color(cur ? t.accent : on ? t.input : "#00000000")
+      .when(cur, (el) => el.bg(alpha(t.accent, "1f")))
+      .when(!cur && on, (el) => el.bg(t.selected).child(div().absolute().left(2).w(2).h(12).rounded_full().bg(accent ?? t.foreground)))
+      .when(!cur && !on, (el) => el.hover((s) => s.bg(t.hover)))
       .on_click(() => (this.listed.has(k.address) ? run("pane.focus", { terminal: k.address }) : this.peek(k.address)))
       .children(s.lines.map(l => div().self_start().mt(-4).w(9).h(17).mr(4).flex_none()
         .when(Boolean(l), el => el.border_l(1.5).border_color(t.input))
@@ -410,6 +549,7 @@ export default class Agents extends View {
       const full = byPriority || isPinned;
       const name = full ? spName || label(a) : more ?? (/^\d+$/.test(label(a)) ? a.program?.name || label(a) : label(a));
       const dot = full ? spaceMark(sp, spFill, true) : null;
+      const cur = this.hasFocus() && this.cursor === `ag:${a.address}`;
       return h_flex()
         .id(`ag-${a.address}`)
         .relative()
@@ -420,9 +560,10 @@ export default class Agents extends View {
         .items_center()
         .gap(9)
         .border_1()
-        .border_color(a.focused ? t.input : "#00000000")
-        .when(a.focused, (el) => el.bg(t.selected).child(div().absolute().left(2).w(2).h(14).rounded_full().bg(spFill ?? t.foreground)))
-        .when(!a.focused, (el) => el.hover((s) => s.bg(t.hover)))
+        .border_color(cur ? t.accent : a.focused ? t.input : "#00000000")
+        .when(cur, (el) => el.bg(alpha(t.accent, "1f")))
+        .when(!cur && a.focused, (el) => el.bg(t.selected).child(div().absolute().left(2).w(2).h(14).rounded_full().bg(spFill ?? t.foreground)))
+        .when(!cur && !a.focused, (el) => el.hover((s) => s.bg(t.hover)))
         .cursor_pointer()
         .on_hover((on, cx) => {
           if (on) this.hovered = a.address;
@@ -462,6 +603,7 @@ export default class Agents extends View {
       const open = !this.folded.has(g.id);
       const top = g.members.reduce((m, a) => ((RANK[a.status] ?? 0) > (RANK[m] ?? 0) ? a.status : m), null);
       const dot = g.space ? spaceMark(g.space, spaceFill(g.space, t, spColors)) : null;
+      const cur = this.hasFocus() && this.cursor === `grp:${g.id}`;
       return h_flex()
         .id(g.id)
         .px(8)
@@ -470,6 +612,10 @@ export default class Agents extends View {
         .flex_none()
         .gap(6)
         .items_center()
+        .rounded(6)
+        .border_1()
+        .border_color(cur ? t.accent : "#00000000")
+        .when(cur, (el) => el.bg(alpha(t.accent, "1f")))
         .text_size(11)
         .font_medium()
         .cursor_pointer()
@@ -486,16 +632,46 @@ export default class Agents extends View {
           .when(!byPriority && top && top !== "idle", (el) => el.child(this.status(t, { status: top }, true)))
           .child(svg("mods/workspace-chrome/chevron-right.svg").size(11).flex_none().text_color(t.dim)));
     };
-    const rows = collapsed
-      ? list.flatMap(withKids)
-      : groups.flatMap((g) => [header(g), ...(this.folded.has(g.id) ? [] : g.members.flatMap(withKids))]);
+    const nav = [];
+    const rows = [];
+    if (collapsed) {
+      list.forEach((a, i) => {
+        nav.push({ key: `ag:${a.address}`, kind: "agent", agent: a, subs: 0, groupId: null, rowIndex: rows.length });
+        rows.push(...withKids(a, i));
+      });
+    } else {
+      for (const g of groups) {
+        nav.push({ key: `grp:${g.id}`, kind: "group", groupId: g.id, rowIndex: rows.length });
+        rows.push(header(g));
+        if (!this.folded.has(g.id)) {
+          g.members.forEach((a, i) => {
+            const subs = this.tree(all, a.address);
+            nav.push({ key: `ag:${a.address}`, kind: "agent", agent: a, subs: subs.length, groupId: g.id, rowIndex: rows.length });
+            rows.push(row(a, i, subs));
+            if (!this.folded.has(a.address)) {
+              const accent = spaceFill(spaceById.get(a.space), t, spColors) ?? t.foreground;
+              for (const s of subs) {
+                nav.push({ key: `sub:${s.t.address}`, kind: "sub", sub: s.t, parent: a.address, groupId: g.id, rowIndex: rows.length });
+                rows.push(this.subRow(t, s, shown, byPriority, accent));
+              }
+            }
+          });
+        }
+      }
+    }
+    this.nav = nav;
+    const hasFocus = this.hasFocus();
 
     return v_flex()
+      .relative()
       .size_full()
       .min_h(0)
       .bg(t.chrome)
       .border_t(1)
       .border_color(t.border)
+      .when(Boolean(this.focus), (el) => el.track_focus(this.focus))
+      .on_key_down((e, cx) => this.handleKey(e, cx))
+      .when(hasFocus, (el) => el.child(div().absolute().left(0).top(0).bottom(0).w(2).bg(t.accent)))
       .text_size(13)
       .when(!collapsed, (el) =>
         el.child(
@@ -507,7 +683,7 @@ export default class Agents extends View {
             .flex_none()
             .items_center()
             .justify_between()
-            .child(div().text_size(11.5).font_medium().text_color(t.dim).child("Agents"))
+            .child(div().text_size(11.5).font_medium().when(hasFocus, (d) => d.font_semibold()).text_color(hasFocus ? t.accent : t.dim).child("Agents"))
             .child(
               div()
                 .id("ag-sort")
@@ -523,7 +699,7 @@ export default class Agents extends View {
       .when(list.length === 0 && !collapsed, (el) =>
         el.child(div().px(12).text_size(12).text_color(t.dim).child("No agent status yet. Agents show up here when they report their status. Older versions and agents inside tmux may not.")),
       )
-      .child(v_flex().id("ag-list").flex_1().min_h(0).px(collapsed ? 0 : 8).overflow_y_scrollbar().mode("always").children(rows))
+      .child(v_flex().id("ag-list").flex_1().min_h(0).px(collapsed ? 0 : 8).overflow_y_scrollbar().mode("always").when(Boolean(this.scroll), (el) => el.track_scroll(this.scroll)).children(rows))
       .when(collapsed, (el) =>
         el.child(
           h_flex()

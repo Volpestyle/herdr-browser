@@ -1957,13 +1957,13 @@ impl AppWindow {
             if let Some(block) = block {
                 let address = block.terminal()?;
                 return Some(json!({ "space": p.id, "tab": ctx.id, "pane": null, "terminal": address,
-                    "shown": null, "agent": self.shown_agent(), "cwd": self.cwds.get(address) }));
+                    "shown": null, "agent": self.shown_agent(), "cwd": self.cwds.get(address), "block": self.focused_block }));
             }
             let pane = ctx.focused_pane()?;
             let cwd = (if self.shows_agent() { self.shown_agent() } else { m.address_of(&pane) }).and_then(|a| self.cwds.get(&a).cloned());
             Some(json!({ "space": p.id, "tab": ctx.id, "terminal": m.address_of(&pane), "shown": self.swapped.get(&pane),
-                "pane": pane, "agent": self.shown_agent(), "cwd": cwd }))
-        });
+                "pane": pane, "agent": self.shown_agent(), "cwd": cwd, "block": self.focused_block }))
+        }).or_else(|| self.focused_block.as_ref().map(|b| json!({ "block": b })));
         let machines = self.documents.iter().map(|(name, slot)| json!({
             "name": (!name.is_empty()).then_some(name), "layout": slot.layout(),
         })).collect();
@@ -3351,11 +3351,17 @@ impl AppWindow {
                 }
                 let pane = Self::owned(a, "pane").or_else(|| Self::arg(a, "terminal").and_then(|t| self.model.pane_of(t)));
                 let Some(p) = pane.filter(|p| self.model.tab_of(p).is_some()) else { return self.fail("no such pane") };
-                self.focused_block = None;
+                let was_block = self.focused_block.take().is_some();
+                let same_pane = self.focused_pane.as_deref() == Some(p.as_str());
                 self.model.focus_pane(&p);
                 self.focused_pane = None;
                 self.agent = self.model.address_of(&p);
                 self.swapped.remove(&p);
+                if was_block && same_pane {
+                    self.sync(window, cx);
+                    self.focus_active_pane(window, cx);
+                    return;
+                }
             }
             "pane.go" => {
                 let dir = Self::arg(a, "direction").unwrap_or_default();
@@ -3363,6 +3369,13 @@ impl AppWindow {
                     return self.fail(format!("{name} direction is left, right, up or down, not {dir:?}"));
                 }
                 return self.go(dir, window, cx);
+            }
+            "focus.cycle" => {
+                let dir = Self::arg(a, "direction").unwrap_or("next");
+                if !matches!(dir, "next" | "prev" | "pane") {
+                    return self.fail(format!("{name} direction is next, prev or pane, not {dir:?}"));
+                }
+                return self.cycle_focus(dir, window, cx);
             }
             "pane.swap" => {
                 let by = match swap_by(a) {
@@ -3818,11 +3831,87 @@ impl AppWindow {
             self.model.focus_pane(id);
             self.focused_pane = None;
         }
+        for copy in self.copies.values() {
+            if let Some(browser) = &copy.browser {
+                browser.read(cx).release_focus();
+            }
+        }
         self.focused_block = Some(id.to_owned());
         self.sync(window, cx);
         if !self.overlays.iter().any(|o| o.kind.modal_keys()) {
             self.focus.focus(window, cx);
             self.hand_keyboard();
+        }
+    }
+
+    fn focus_active_pane(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.focused_block = None;
+        let no_dialog = !self.overlays.iter().any(|o| o.kind.modal_keys());
+        let target = self.focused_pane.clone().or_else(|| self.model.focused_pane());
+        if no_dialog {
+            if let Some(browser) = target
+                .as_ref()
+                .and_then(|p| self.copies.get(p))
+                .and_then(|c| c.browser.as_ref())
+            {
+                self.focus.focus(window, cx);
+                browser.read(cx).focus_page();
+            } else if let Some(f) = target.as_deref().and_then(|p| self.pane_focus(p, cx)) {
+                f.focus(window, cx);
+            } else {
+                self.focus.focus(window, cx);
+            }
+        }
+        self.publish(cx);
+        cx.notify();
+    }
+
+    fn cycle_focus(&mut self, dir: &str, window: &mut Window, cx: &mut Context<Self>) {
+        if dir == "pane" {
+            return self.focus_active_pane(window, cx);
+        }
+        let mut blocks: Vec<String> = self
+            .chrome
+            .visible_blocks()
+            .into_iter()
+            .filter(|n| self.focusable(&n.id))
+            .map(|n| n.id.clone())
+            .collect();
+        if blocks.is_empty()
+            && self.chrome.find("sidebar").is_some_and(|s| {
+                s.hidden
+                    && s.walk().into_iter().any(|n| {
+                        matches!(n.content(), Some(Content::Mod { name, .. }) if self.folders.get(name).is_some_and(|f| f.hint.focusable))
+                    })
+            })
+        {
+            if let Some(sidebar) = self.chrome.find_mut("sidebar") {
+                sidebar.hidden = false;
+            }
+            self.sync(window, cx);
+            blocks = self
+                .chrome
+                .visible_blocks()
+                .into_iter()
+                .filter(|n| self.focusable(&n.id))
+                .map(|n| n.id.clone())
+                .collect();
+        }
+        if blocks.is_empty() {
+            return self.focus_active_pane(window, cx);
+        }
+        let mut areas: Vec<Option<String>> = Vec::with_capacity(blocks.len() + 1);
+        areas.push(None);
+        areas.extend(blocks.into_iter().map(Some));
+        let cur = areas.iter().position(|a| *a == self.focused_block).unwrap_or(0);
+        let next = if dir == "prev" {
+            (cur + areas.len() - 1) % areas.len()
+        } else {
+            (cur + 1) % areas.len()
+        };
+        match &areas[next] {
+            Some(id) => self.focus_block(id, window, cx),
+            None => self.focus_active_pane(window, cx),
         }
     }
 

@@ -6,7 +6,7 @@
 
 import { View, div, svg, image } from "gpui-kit";
 import { v_flex, h_flex, ScrollHandle } from "gpui-base";
-import { spaces, machines, panes, run, openOverlay, exec, hc, theme, shared, setShared, watchFolder, window, layout } from "herdr";
+import { spaces, machines, panes, focused, nextCommand, run, openOverlay, exec, hc, theme, shared, setShared, watchFolder, window, layout } from "herdr";
 
 function find(node, id) {
   if (node?.id === id) return node;
@@ -225,6 +225,9 @@ export default class Spaces extends View {
     this.tabOver = null;
     this.scroll = ScrollHandle.new(); // the list's position: the active space is brought into view through it
     this.activeAt = -1; // the active space's place among the list's children (headers and rows), -1 when not drawn
+    this.focus = cx?.focus_handle?.() ?? null;
+    this.cursor = null;
+    this.nav = [];
     this.machines = [];
     try {
       this.reconnecting = JSON.parse(localStorage.getItem("machines.reconnecting") ?? "{}");
@@ -233,6 +236,20 @@ export default class Spaces extends View {
     } catch { this.reconnecting = {}; }
     try { this.folded = new Set(JSON.parse(localStorage.getItem("machines.folded") ?? "[]")); } catch { this.folded = new Set(); }
     try { this.open = new Set(JSON.parse(localStorage.getItem("spaces.open") ?? "[]")); } catch { this.open = new Set(); }
+    if (this.focus && typeof nextCommand === "function" && cx?.spawn) {
+      cx.spawn(async (cx) => {
+        for (;;) {
+          const cmd = await nextCommand();
+          if (cmd === "focus") {
+            this.focus.focus();
+            this.cursor = this.initialCursor();
+            const item = this.nav.find((n) => n.key === this.cursor);
+            if (item) this.scroll.scroll_to_item(item.rowIndex);
+            cx.notify();
+          }
+        }
+      });
+    }
     this.refreshMachines(cx);
     cx.timer.every(15000, cx => this.refreshMachines(cx));
     // Refresh only when the refs could have changed (see `due`).
@@ -481,18 +498,134 @@ export default class Spaces extends View {
     return out.filter(r => this.shown.has(r.w.id));
   }
 
+  hasFocus() {
+    return typeof focused === "function" && focused()?.block === "spaces";
+  }
+
+  initialCursor() {
+    const active = spaces().find((s) => s.active);
+    if (active) {
+      if (this.open.has(active.id)) {
+        const activeTab = (active.tabs ?? []).find((tab) => tab.active && !tab.settled);
+        if (activeTab) return `tab:${activeTab.id}`;
+      }
+      return `space:${active.id}`;
+    }
+    return this.nav[0]?.key ?? null;
+  }
+
+  selectCursor(key, cx) {
+    this.cursor = key;
+    const item = this.nav.find((n) => n.key === key);
+    if (item) this.scroll.scroll_to_item(item.rowIndex);
+    cx.notify();
+  }
+
+  handleKey(e, cx) {
+    const m = e.modifiers ?? {};
+    if (m.control || m.platform || m.alt) return;
+    const k = e.key;
+    if (k === "escape") {
+      cx.stop_propagation();
+      run("focus.cycle", { direction: "pane" });
+      return;
+    }
+    if (!this.nav.length) return;
+    let idx = this.nav.findIndex((n) => n.key === this.cursor);
+    if (idx < 0) {
+      const init = this.initialCursor();
+      idx = Math.max(0, this.nav.findIndex((n) => n.key === init));
+    }
+    const item = this.nav[idx];
+    const saveOpen = () => localStorage.setItem("spaces.open", JSON.stringify([...this.open]));
+    if (k === "j" || k === "down") {
+      cx.stop_propagation();
+      const next = this.nav[Math.min(this.nav.length - 1, idx + 1)];
+      this.selectCursor(next.key, cx);
+    } else if (k === "k" || k === "up") {
+      cx.stop_propagation();
+      const prev = this.nav[Math.max(0, idx - 1)];
+      this.selectCursor(prev.key, cx);
+    } else if (k === "g") {
+      cx.stop_propagation();
+      const target = m.shift ? this.nav[this.nav.length - 1] : this.nav[0];
+      this.selectCursor(target.key, cx);
+    } else if (k === "l" || k === "right") {
+      cx.stop_propagation();
+      if (item.kind === "space") {
+        const tabs = (item.space.tabs ?? []).filter((tab) => !tab.settled);
+        if (tabs.length) {
+          if (!this.open.has(item.space.id)) {
+            this.open.add(item.space.id);
+            saveOpen();
+            cx.notify();
+          } else {
+            this.selectCursor(`tab:${tabs[0].id}`, cx);
+          }
+        } else {
+          run("space.select", { id: item.space.id });
+          run("focus.cycle", { direction: "pane" });
+        }
+      } else {
+        run("tab.select", { id: item.tab.id });
+        run("focus.cycle", { direction: "pane" });
+      }
+    } else if (k === "h" || k === "left") {
+      cx.stop_propagation();
+      if (item.kind === "tab") {
+        this.selectCursor(`space:${item.space.id}`, cx);
+      } else if (this.open.has(item.space.id)) {
+        this.open.delete(item.space.id);
+        saveOpen();
+        cx.notify();
+      }
+    } else if (k === " " || k === "space") {
+      cx.stop_propagation();
+      if (item.kind === "space") {
+        const tabs = (item.space.tabs ?? []).filter((tab) => !tab.settled);
+        if (tabs.length) {
+          this.open.has(item.space.id) ? this.open.delete(item.space.id) : this.open.add(item.space.id);
+          saveOpen();
+          cx.notify();
+        } else {
+          run("space.select", { id: item.space.id });
+        }
+      } else {
+        run("tab.select", { id: item.tab.id });
+      }
+    } else if (k === "enter") {
+      cx.stop_propagation();
+      if (item.kind === "space") run("space.select", { id: item.space.id });
+      else run("tab.select", { id: item.tab.id });
+      run("focus.cycle", { direction: "pane" });
+    }
+  }
+
   // The rows, under a header per machine once one isn't this computer.
   grouped(t, collapsed) {
     const rows = this.ordered();
     const ps = panes();
-    const draw = (r) => (collapsed ? [this.compact(r, t)] : [this.row(r, t), ...this.tabRows(r.w, t, ps)]);
-    // Draws the rows of a list of spaces, each followed by its open tabs, and the active space's place among them.
-    const drawAll = (list) => {
+    const nav = [];
+    const drawAll = (list, offset) => {
       const out = [];
       let at = -1;
       for (const r of list) {
         if (r.w.active && at < 0) at = out.length;
-        out.push(...draw(r));
+        const spaceRowIndex = offset + out.length;
+        nav.push({ key: `space:${r.w.id}`, kind: "space", space: r.w, rowIndex: spaceRowIndex });
+        if (collapsed) {
+          out.push(this.compact(r, t));
+        } else {
+          out.push(this.row(r, t));
+          if (this.open.has(r.w.id)) {
+            const visibleTabs = (r.w.tabs ?? []).filter((tab) => !tab.settled);
+            const tabEls = this.tabRows(r.w, t, ps);
+            visibleTabs.forEach((tab, ti) => {
+              nav.push({ key: `tab:${tab.id}`, kind: "tab", tab, space: r.w, rowIndex: offset + out.length + ti });
+            });
+            out.push(...tabEls);
+          }
+        }
       }
       return [out, at];
     };
@@ -508,13 +641,14 @@ export default class Spaces extends View {
     };
     const loadingRow = m => h_flex().id(`machine-loading-${m ?? "local"}`).h(28).flex_none().px(collapsed ? 0 : 8).items_center().when(collapsed, el => el.justify_center()).text_size(12).text_color(t.dim).child(collapsed ? "…" : "Loading…");
     if (!remote.length) {
-      if (loading(null) && !rows.length) return [loadingRow(null)];
-      const [drawn, at] = drawAll(rows);
+      if (loading(null) && !rows.length) { this.nav = nav; return [loadingRow(null)]; }
+      const [drawn, at] = drawAll(rows, 0);
       this.activeAt = at;
+      this.nav = nav;
       return drawn;
     }
     const machineNames = [null, ...remote];
-    return machineNames.flatMap((m) => {
+    const result = machineNames.flatMap((m) => {
       const mine = rows.filter((r) => (r.w.machine ?? null) === m);
       const repair = this.reconnecting[m];
       const machine = this.machines.find(k => k.name === m) ?? repair?.machine;
@@ -568,12 +702,14 @@ export default class Spaces extends View {
             .text_size(11).text_color(t.foreground).bg(t.raised).cursor_pointer().hover(s => s.bg(t.hover))
             .on_click((_e, cx) => { cx.stop_propagation(); cx.write_to_clipboard(login); this.copiedLogin = login; cx.notify(); })
             .child(this.copiedLogin === login ? "Copied" : "Copy")))] : [];
-      const [drawn, first] = folded ? [[], -1] : drawAll(mine);
+      const [drawn, first] = folded ? [[], -1] : drawAll(mine, before + 1 + guidance.length);
       const items = [cell(head), ...guidance, ...(folded ? [] : mine.length ? drawn : [loading(m) ? loadingRow(m) : cell(empty)])];
       if (first >= 0) this.activeAt = before + 1 + guidance.length + first;
       before += items.length;
       return items;
     });
+    this.nav = nav;
+    return result;
   }
 
   // Only what's unusual, after the name: "herdr \u00b7 spike \u21912 \u21931". The repo or
@@ -607,6 +743,7 @@ export default class Spaces extends View {
     const fill = spaceFill(w, t, colors);
     const label = spaceLabel(w);
     const tip = spaceTooltip(w, i, g, window()?.platform);
+    const cur = this.hasFocus() && this.cursor === `space:${w.id}`;
     return v_flex()
       .relative()
       .id(`space-${w.id}`)
@@ -616,8 +753,11 @@ export default class Spaces extends View {
       .justify_center()
       .rounded(8)
       .tooltip(tip)
-      .when(on, (el) => el.bg(t.selected))
-      .when(!on, (el) => el.hover((s) => s.bg(t.hover)))
+      .border_1()
+      .border_color(cur ? t.accent : "#00000000")
+      .when(cur, (el) => el.bg(alpha(t.accent, "1f")))
+      .when(!cur && on, (el) => el.bg(t.selected))
+      .when(!cur && !on, (el) => el.hover((s) => s.bg(t.hover)))
       .when(this.pressed === w.id && this.over !== w.id, (el) => el.opacity(0.5))
       .when(this.pressed !== null && this.over === w.id && this.pressed !== w.id, (el) => el.child(
         div().absolute().left(0).right(0).h(2).bg(t.accent)
@@ -707,6 +847,7 @@ export default class Spaces extends View {
       const p = lead(tab, ps);
       const icon = tabIcon(p, t);
       const on = w.active && tab.active;
+      const cur = this.hasFocus() && this.cursor === `tab:${tab.id}`;
       const myIdx = allTabs.findIndex((x) => x.id === tab.id);
       const isDragged = drag?.id === tab.id && !(this.tabOver?.kind === "tab" && this.tabOver.id === tab.id);
       const isDropTarget = Boolean(drag) && this.tabOver?.kind === "tab" && this.tabOver.id === tab.id && drag.id !== tab.id;
@@ -723,9 +864,10 @@ export default class Spaces extends View {
         .rounded(7)
         .text_size(12.5)
         .border_1()
-        .border_color(on ? t.input : "#00000000")
-        .when(on, (el) => el.bg(t.selected).child(div().absolute().left(2).w(2).h(12).rounded_full().bg(fill)))
-        .when(!on, (el) => el.hover((s) => s.bg(t.hover)))
+        .border_color(cur ? t.accent : on ? t.input : "#00000000")
+        .when(cur, (el) => el.bg(alpha(t.accent, "1f")))
+        .when(!cur && on, (el) => el.bg(t.selected).child(div().absolute().left(2).w(2).h(12).rounded_full().bg(fill)))
+        .when(!cur && !on, (el) => el.hover((s) => s.bg(t.hover)))
         .when(isDragged, (el) => el.opacity(0.5))
         .when(isDropTarget, (el) => el.child(
           div().absolute().left(28).right(6).h(2).bg(t.accent)
@@ -827,8 +969,13 @@ export default class Spaces extends View {
       this.revealedAt = this.activeAt;
       if (this.activeAt >= 0) this.scroll.scroll_to_item(this.activeAt);
     }
-    return v_flex().size_full().min_h(0).bg(t.chrome).text_size(13)
-      .child(h_flex().h(31).pl(16).pr(10).items_center().justify_between().text_size(11.5).text_color(t.dim)
+    const hasFocus = this.hasFocus();
+    return v_flex().relative().size_full().min_h(0).bg(t.chrome).text_size(13)
+      .when(Boolean(this.focus), el => el.track_focus(this.focus))
+      .on_key_down((e, cx) => this.handleKey(e, cx))
+      .when(hasFocus, el => el.child(div().absolute().left(0).top(0).bottom(0).w(2).bg(t.accent)))
+      .child(h_flex().h(31).pl(16).pr(10).items_center().justify_between().text_size(11.5).text_color(hasFocus ? t.accent : t.dim)
+        .when(hasFocus, el => el.font_semibold())
         .when(collapsed, el => el.pl(0).pr(0).justify_center())
         .when(!collapsed, el => el.child("Spaces"))
         .child(div().id("space-new").size(26).flex_none().flex().items_center().justify_center().rounded(6).hover(s => s.bg(t.hover).text_color(t.foreground))
