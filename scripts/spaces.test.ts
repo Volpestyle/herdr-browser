@@ -817,3 +817,79 @@ test("dropping a dragged pane onto a tab or space row in spaces runs pane.move",
   expect(drag).toBeNull();
   expect(ran).toEqual([["pane.move", { pane: "p1", tab: "new", space: "s2" }]]);
 });
+
+test("spaces list keeps a stable id, does not snap to active while dragging, and edge auto-scrolls", () => {
+  const snapshot: any[] = [
+    { id: "s1", name: "top", folder: "/a", active: true, tabs: [{ id: "t1", name: "one" }, { id: "t2", name: "two" }, { id: "t3", name: "three" }] },
+    { id: "s2", name: "mid", folder: "/b", active: false, tabs: [{ id: "t4", name: "four" }, { id: "t5", name: "five" }] },
+    { id: "s3", name: "bot", folder: "/c", active: false, tabs: [{ id: "t6", name: "six" }] },
+  ];
+  const byId = new Map<string, Record<string, (...args: any[]) => void>>();
+  const makeEl = (): any => {
+    const handlers: Record<string, (...args: any[]) => void> = {};
+    const proxy: any = new Proxy({}, {
+      get: (_, method) => (...args: any[]) => {
+        if (method === "id") byId.set(String(args[0]), handlers);
+        else if (method === "when") { if (args[0]) args[1](proxy); }
+        else if (String(method).startsWith("on_")) {
+          const key = method === "on_mouse_down" || method === "on_mouse_up" ? `${String(method)}:${args[0]}` : String(method);
+          handlers[key] = args.at(-1);
+        }
+        return proxy;
+      },
+    });
+    return proxy;
+  };
+  const scrollCalls: number[] = [];
+  const Spaces = new Function("View", "hc", "localStorage", "spaces", "panes", "focused", "run", "openOverlay", "v_flex", "h_flex", "div", "svg", "image", "shared", "machines", "exec", "window", "watchFolder", "ScrollHandle", "theme", "layout", "setShared", `${source}; return Spaces;`)(
+    class {}, async () => ({ code: 0, stdout: "{}", stderr: "" }),
+    { setItem() {}, getItem: () => null },
+    () => snapshot, () => [], () => null,
+    () => {}, () => {}, makeEl, makeEl, makeEl, makeEl, makeEl,
+    () => null, () => [{ name: null, layout: "ready" }], undefined, () => ({ active: true }), undefined,
+    { new: () => ({ scroll_to_item(i: number) { scrollCalls.push(i); } }) },
+    () => new Proxy({}, { get: () => "#000000" }), () => null, () => {},
+  );
+  const view = new Spaces();
+  const timers: ((cx: any) => void)[] = [];
+  const cx = { stop_propagation() {}, notify() {}, timer: { every(_ms: number, fn: (cx: any) => void) { timers.push(fn); } }, spawn() {} };
+  view.refreshMachines = () => {};
+  view.init({}, cx);
+  view.open = new Set(["s1", "s2", "s3"]);
+  view.render();
+
+  expect(byId.has("spaces-list")).toBe(true);
+  expect(byId.has("spaces-root")).toBe(true);
+  expect(scrollCalls).toEqual([0]);
+
+  scrollCalls.length = 0;
+  view.tabPressed = { id: "t1", space: "s1" };
+  view.tabOver = { kind: "tab", id: "t4", space: "s2" };
+  byId.get("spaces-list")!["on_size_change"]({ width: 200, height: 300 }, cx);
+  expect(scrollCalls).toEqual([]);
+
+  byId.get("spaces-root")!["on_mouse_move"]({ local_position: { x: 40, y: 280 }, bounds: { x: 0, y: 0, width: 200, height: 300 } }, cx);
+  expect(scrollCalls).toEqual([6]);
+  timers.at(-1)!(cx);
+  expect(scrollCalls).toEqual([6, 7]);
+  timers.at(-1)!(cx);
+  expect(scrollCalls).toEqual([6, 7, 8]);
+  timers.at(-1)!(cx);
+  expect(scrollCalls).toEqual([6, 7, 8]);
+
+  byId.get("spaces-root")!["on_mouse_move"]({ local_position: { x: 40, y: 150 }, bounds: { x: 0, y: 0, width: 200, height: 300 } }, cx);
+  timers.at(-1)!(cx);
+  expect(scrollCalls).toEqual([6, 7, 8]);
+
+  byId.get("spaces-root")!["on_mouse_move"]({ local_position: { x: 40, y: 40 }, bounds: { x: 0, y: 0, width: 200, height: 300 } }, cx);
+  expect(scrollCalls).toEqual([6, 7, 8, 4]);
+
+  byId.get("spaces-root")!["on_hover"](false, cx);
+  timers.at(-1)!(cx);
+  expect(scrollCalls).toEqual([6, 7, 8, 4]);
+
+  view.clearDrag();
+  scrollCalls.length = 0;
+  byId.get("spaces-list")!["on_size_change"]({ width: 200, height: 280 }, cx);
+  expect(scrollCalls).toEqual([0]);
+});

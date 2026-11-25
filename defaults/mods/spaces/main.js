@@ -223,6 +223,10 @@ export default class Spaces extends View {
     this.over = null;
     this.tabPressed = null;
     this.tabOver = null;
+    this.paneOver = null;
+    this.dragScrollDir = 0;
+    this.dragScrollIndex = -1;
+    this.listCount = 0;
     this.scroll = ScrollHandle.new(); // the list's position: the active space is brought into view through it
     this.activeAt = -1; // the active space's place among the list's children (headers and rows), -1 when not drawn
     this.focus = cx?.focus_handle?.() ?? null;
@@ -254,6 +258,83 @@ export default class Spaces extends View {
     cx.timer.every(15000, cx => this.refreshMachines(cx));
     // Refresh only when the refs could have changed (see `due`).
     cx.timer.every(250, (cx) => this.checkNew(cx));
+    cx.timer.every(120, (cx) => {
+      if (this.dragScrollDir) this.stepDragScroll(cx);
+    });
+  }
+
+  isDragging() {
+    return Boolean(this.pressed || this.tabPressed || shared("pane.drag"));
+  }
+
+  clearDrag() {
+    this.pressed = null;
+    this.over = null;
+    this.tabPressed = null;
+    this.tabOver = null;
+    this.paneOver = null;
+    this.dragScrollDir = 0;
+    this.dragScrollIndex = -1;
+  }
+
+  dragRowIndex() {
+    let key = null;
+    if (this.tabOver?.kind === "tab") key = `tab:${this.tabOver.id}`;
+    else if (this.tabOver?.kind === "space") key = `space:${this.tabOver.id}`;
+    else if (this.over) key = `space:${this.over}`;
+    else if (this.paneOver) key = this.paneOver;
+    else if (this.tabPressed) key = `tab:${this.tabPressed.id}`;
+    else if (this.pressed) key = `space:${this.pressed}`;
+    const found = key ? (this.nav ?? []).find((n) => n.key === key) : null;
+    return found ? found.rowIndex : -1;
+  }
+
+  updateDragScroll(e, cx) {
+    if (!this.isDragging()) {
+      this.dragScrollDir = 0;
+      this.dragScrollIndex = -1;
+      return;
+    }
+    const y = e?.local_position?.y;
+    const h = e?.bounds?.height;
+    const header = 31;
+    const edge = 40;
+    let dir = 0;
+    if (typeof y === "number" && typeof h === "number" && h > header) {
+      if (y >= h - edge) dir = 1;
+      else if (y <= header + edge) dir = -1;
+    }
+    if (dir === 0) {
+      this.dragScrollDir = 0;
+      this.dragScrollIndex = -1;
+      return;
+    }
+    const rowIdx = this.dragRowIndex();
+    if (dir !== this.dragScrollDir) {
+      this.dragScrollDir = dir;
+      this.dragScrollIndex = rowIdx;
+      this.stepDragScroll(cx);
+      return;
+    }
+    if (rowIdx >= 0) {
+      if (dir > 0 && rowIdx > this.dragScrollIndex) this.dragScrollIndex = rowIdx;
+      if (dir < 0 && (this.dragScrollIndex < 0 || rowIdx < this.dragScrollIndex)) this.dragScrollIndex = rowIdx;
+    }
+  }
+
+  stepDragScroll(cx) {
+    if (!this.isDragging() || !this.dragScrollDir || !(this.listCount > 0)) {
+      this.dragScrollDir = 0;
+      this.dragScrollIndex = -1;
+      return;
+    }
+    const current = this.dragScrollIndex >= 0 ? this.dragScrollIndex : (this.activeAt >= 0 ? this.activeAt : 0);
+    const next = Math.max(0, Math.min(this.listCount - 1, current + this.dragScrollDir));
+    if (next !== this.dragScrollIndex) {
+      this.dragScrollIndex = next;
+      this.scroll.scroll_to_item(next);
+      cx.notify();
+    }
   }
 
   checkNew(cx) {
@@ -773,6 +854,7 @@ export default class Spaces extends View {
         this.over = w.id;
       })
       .on_mouse_move((_e, cx) => {
+        if (shared("pane.drag")) this.paneOver = `space:${w.id}`;
         if (this.tabPressed) {
           const source = spaces().find(s => s.id === this.tabPressed.space);
           const over = source && (source.machine ?? null) === (w.machine ?? null) && this.tabPressed.space !== w.id
@@ -796,6 +878,7 @@ export default class Spaces extends View {
         if (pDrag && (pDrag.machine ?? null) === (w.machine ?? null)) {
           cx.stop_propagation();
           setShared("pane.drag", null);
+          this.clearDrag();
           run("pane.move", { pane: pDrag.pane, tab: "new", space: w.id });
           cx.notify();
           return;
@@ -803,8 +886,7 @@ export default class Spaces extends View {
         if (this.tabPressed) {
           const from = this.tabPressed;
           const over = this.tabOver;
-          this.tabPressed = null;
-          this.tabOver = null;
+          this.clearDrag();
           if (over?.kind === "space" && over.id === w.id && from.space !== w.id) {
             run("tab.move", { id: from.id, space: w.id });
           }
@@ -813,8 +895,7 @@ export default class Spaces extends View {
         }
         const from = this.pressed;
         const over = this.over;
-        this.pressed = null;
-        this.over = null;
+        this.clearDrag();
         if (from !== null && over === w.id && from !== w.id) {
           const index = spaces().findIndex(s => s.id === w.id);
           if (index !== -1) run("space.move", { id: from, index: index + 1 });
@@ -894,6 +975,7 @@ export default class Spaces extends View {
           this.tabOver = { kind: "tab", id: tab.id, space: w.id };
         })
         .on_mouse_move((_e, cx) => {
+          if (shared("pane.drag")) this.paneOver = `tab:${tab.id}`;
           if (!this.tabPressed) return;
           const source = spaces().find((s) => s.id === this.tabPressed.space);
           const over = source && (source.machine ?? null) === (w.machine ?? null)
@@ -909,16 +991,14 @@ export default class Spaces extends View {
           const pDrag = shared("pane.drag");
           if (pDrag && (pDrag.machine ?? null) === (w.machine ?? null) && pDrag.tab !== tab.id) {
             setShared("pane.drag", null);
+            this.clearDrag();
             run("pane.move", { pane: pDrag.pane, tab: tab.id });
             cx.notify();
             return;
           }
           const from = this.tabPressed;
           const over = this.tabOver;
-          this.tabPressed = null;
-          this.tabOver = null;
-          this.pressed = null;
-          this.over = null;
+          this.clearDrag();
           if (!from) return;
           if (from.id === tab.id) {
             run("tab.select", { id: tab.id });
@@ -983,17 +1063,21 @@ export default class Spaces extends View {
     }
     if (changed) setShared("space.colors", kept);
     const list = this.grouped(t, collapsed);
+    this.listCount = list.length;
     // Bring the active space into view when it, or its place in the list, changes; a row already in view stays put.
     const active = sp.find(p => p.active)?.id;
-    if (active !== this.revealed || this.activeAt !== this.revealedAt) {
+    if (!this.isDragging() && (active !== this.revealed || this.activeAt !== this.revealedAt)) {
       this.revealed = active;
       this.revealedAt = this.activeAt;
       if (this.activeAt >= 0) this.scroll.scroll_to_item(this.activeAt);
     }
     const hasFocus = this.hasFocus();
-    return v_flex().relative().size_full().min_h(0).bg(t.chrome).text_size(13)
+    return v_flex().id("spaces-root").relative().size_full().min_h(0).bg(t.chrome).text_size(13)
       .when(Boolean(this.focus), el => el.track_focus(this.focus))
       .on_key_down((e, cx) => this.handleKey(e, cx))
+      .on_mouse_move((e, cx) => this.updateDragScroll(e, cx))
+      .on_hover((hovered) => { if (!hovered) { this.dragScrollDir = 0; this.dragScrollIndex = -1; } })
+      .on_mouse_up("left", (_e, cx) => { if (this.pressed || this.tabPressed) { this.clearDrag(); cx.notify(); } })
       .when(hasFocus, el => el.child(div().absolute().left(0).top(0).bottom(0).w(2).bg(t.accent)))
       .child(h_flex().h(31).pl(16).pr(10).items_center().justify_between().text_size(11.5).text_color(hasFocus ? t.accent : t.dim)
         .when(hasFocus, el => el.font_semibold())
@@ -1001,10 +1085,10 @@ export default class Spaces extends View {
         .when(!collapsed, el => el.child("Spaces"))
         .child(div().id("space-new").size(26).flex_none().flex().items_center().justify_center().rounded(6).hover(s => s.bg(t.hover).text_color(t.foreground))
           .on_click(() => run("space.new")).child(svg("mods/workspace-chrome/plus.svg").size(14))))
-      .child(v_flex().flex_1().min_h(0).px(collapsed ? 0 : 8).pb(14).overflow_y_scrollbar().mode("always").track_scroll(this.scroll)
+      .child(v_flex().id("spaces-list").flex_1().min_h(0).px(collapsed ? 0 : 8).pb(14).overflow_y_scrollbar().mode("always").track_scroll(this.scroll)
         // A block above (another mod's) growing, or the window resizing, shrinks this list and can push the active space out.
-        .on_size_change((_size, cx) => { if (this.activeAt >= 0) { this.scroll.scroll_to_item(this.activeAt); cx.notify(); } })
-        .on_mouse_up("left", (_e, cx) => { this.pressed = null; this.over = null; this.tabPressed = null; this.tabOver = null; cx.notify(); })
+        .on_size_change((_size, cx) => { if (!this.isDragging() && this.activeAt >= 0) { this.scroll.scroll_to_item(this.activeAt); cx.notify(); } })
+        .on_mouse_up("left", (_e, cx) => { this.clearDrag(); cx.notify(); })
         .children(list));
   }
 }
