@@ -116,6 +116,42 @@ fn same_host(a: &str, b: &str) -> bool {
     matches!((host(a), host(b)), (Some(ha), Some(hb)) if ha == hb)
 }
 
+fn is_web_url(url: &str) -> bool {
+    url::Url::parse(url.trim())
+        .is_ok_and(|u| matches!(u.scheme(), "http" | "https") && u.host_str().is_some())
+}
+
+/// Persisted browser state that lives beside `hc`'s shared layout document
+/// (terminal -> last opened browser pane bindings so running agents keep their
+/// default pane across app restarts).
+#[derive(Clone, Debug, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub struct SessionState {
+    #[serde(default)]
+    pub openers: std::collections::HashMap<String, String>,
+}
+
+impl SessionState {
+    pub fn path() -> std::path::PathBuf {
+        crate::mods::app_dir().join("browser-state.json")
+    }
+
+    pub fn load_from(path: &std::path::Path) -> Self {
+        std::fs::read_to_string(path)
+            .ok()
+            .and_then(|text| serde_json::from_str(&text).ok())
+            .unwrap_or_default()
+    }
+
+    pub fn save_to(&self, path: &std::path::Path) -> std::io::Result<()> {
+        let text = serde_json::to_string_pretty(self).map_err(std::io::Error::other)? + "\n";
+        crate::persist::write_atomic(path, text)
+    }
+
+    pub fn prune(&mut self, keep_pane: impl Fn(&str) -> bool) {
+        self.openers.retain(|_, pane| keep_pane(pane));
+    }
+}
+
 /// A page's HTTP sign-in challenge, answered from the pane. Dropping it cancels.
 pub struct Auth {
     host: String,
@@ -208,6 +244,7 @@ impl Favorites {
 pub struct Browser {
     pane: String,
     profile: String,
+    markdown_url: Option<String>,
     input: Entity<InputState>,
     find_input: Entity<InputState>,
     find_open: bool,
@@ -237,9 +274,9 @@ impl EventEmitter<BrowserEvent> for Browser {}
 
 impl Browser {
     pub fn new(pane: &str, props: &Value, window: &mut Window, cx: &mut Context<Self>) -> Self {
-        let (url, initial_title) = match props.get("markdown_path").and_then(Value::as_str) {
+        let (url, initial_title, markdown_url) = match props.get("markdown_path").and_then(Value::as_str) {
             Some(path) => match markdown::open(path) {
-                Ok(preview) => (preview.url, preview.title),
+                Ok(preview) => (preview.url.clone(), preview.title, Some(preview.url)),
                 Err(_) => (
                     props
                         .get("url")
@@ -247,6 +284,7 @@ impl Browser {
                         .and_then(|u| address(u).ok())
                         .unwrap_or_else(|| "about:blank".into()),
                     "Markdown".into(),
+                    None,
                 ),
             },
             None => {
@@ -257,8 +295,14 @@ impl Browser {
                         .unwrap_or("https://www.google.com"),
                 )
                 .unwrap_or_else(|_| "about:blank".into());
-                let label = url_label(&url);
-                (url, label)
+                let label = props
+                    .get("title")
+                    .and_then(Value::as_str)
+                    .map(str::trim)
+                    .filter(|t| !t.is_empty() && *t != "Browser" && *t != "about:blank")
+                    .map(str::to_owned)
+                    .unwrap_or_else(|| url_label(&url));
+                (url, label, None)
             }
         };
         let input =
@@ -332,6 +376,7 @@ impl Browser {
         Self {
             pane: pane.into(),
             profile,
+            markdown_url,
             input,
             find_input,
             find_open: false,
@@ -360,6 +405,32 @@ impl Browser {
 
     pub fn url(&self) -> &str {
         &self.url
+    }
+
+    /// Snapshot of `Content::Mod.props` to persist across app restarts.
+    pub fn persisted_props(&self, existing: &Value) -> Value {
+        let mut map = existing.as_object().cloned().unwrap_or_default();
+        map.insert("profile".into(), json!(self.profile));
+        let on_markdown = self
+            .markdown_url
+            .as_deref()
+            .is_some_and(|md| same_host(&self.url, md));
+        if on_markdown {
+            let title = self.display_title();
+            if !title.is_empty() && title != "Browser" && title != "Markdown" {
+                map.insert("title".into(), json!(title));
+            }
+            return Value::Object(map);
+        }
+        if is_web_url(&self.url) {
+            map.remove("markdown_path");
+            map.insert("url".into(), json!(self.url));
+        }
+        let title = self.display_title();
+        if !title.is_empty() && title != "Browser" && title != "about:blank" {
+            map.insert("title".into(), json!(title));
+        }
+        Value::Object(map)
     }
 
     pub fn display_title(&self) -> String {
@@ -1344,6 +1415,59 @@ mod tests {
             assert!(!browser.find_open);
             assert_eq!(browser.find_matches, None);
         });
+    }
+
+    #[gpui::test]
+    fn persisted_props_tracks_navigation_and_restores_saved_title(cx: &mut gpui::TestAppContext) {
+        cx.update(gpui_base::init);
+        let initial = serde_json::json!({"url": "https://www.google.com/", "profile": "person"});
+        let (browser, cx) = cx.add_window_view(|window, cx| {
+            super::Browser::new("browser-persist", &initial, window, cx)
+        });
+        browser.update_in(cx, |browser, window, cx| {
+            browser.event(super::Event::Loading("https://linear.app/team/ENG-42".into()), window, cx);
+            browser.event(super::Event::Title("ENG-42 Fix browser state".into()), window, cx);
+        });
+        let saved = browser.read_with(cx, |browser, _| browser.persisted_props(&initial));
+        assert_eq!(saved["url"], "https://linear.app/team/ENG-42");
+        assert_eq!(saved["title"], "ENG-42 Fix browser state");
+        assert_eq!(saved["profile"], "person");
+
+        // A transient about:blank never clobbers the last persisted web URL.
+        browser.update_in(cx, |browser, window, cx| {
+            browser.event(super::Event::Loading("about:blank".into()), window, cx);
+        });
+        let after_blank = browser.read_with(cx, |browser, _| browser.persisted_props(&saved));
+        assert_eq!(after_blank["url"], "https://linear.app/team/ENG-42");
+        assert_eq!(after_blank["title"], "ENG-42 Fix browser state");
+
+        // Reopening from persisted props immediately restores the saved URL and title.
+        let (restored, cx) = cx.add_window_view(|window, cx| {
+            super::Browser::new("browser-persist", &saved, window, cx)
+        });
+        restored.read_with(cx, |browser, _| {
+            assert_eq!(browser.url(), "https://linear.app/team/ENG-42");
+            assert_eq!(browser.display_title(), "ENG-42 Fix browser state");
+        });
+    }
+
+    #[test]
+    fn session_state_roundtrips_and_prunes_closed_panes() {
+        let dir = std::env::temp_dir().join(format!("herdr-browser-state-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("browser-state.json");
+        let mut state = super::SessionState::default();
+        state.openers.insert("t1".into(), "p1".into());
+        state.openers.insert("t2".into(), "p2".into());
+        state.save_to(&path).unwrap();
+
+        let mut loaded = super::SessionState::load_from(&path);
+        assert_eq!(loaded, state);
+        loaded.prune(|pane| pane == "p1");
+        assert_eq!(loaded.openers.len(), 1);
+        assert_eq!(loaded.openers.get("t1").map(String::as_str), Some("p1"));
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]

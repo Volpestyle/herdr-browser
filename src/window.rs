@@ -527,7 +527,7 @@ impl AppWindow {
             model: Model::default(),
             terms: HashMap::new(),
             copies: HashMap::new(),
-            browser_openers: HashMap::new(),
+            browser_openers: crate::browser::SessionState::load_from(&crate::browser::SessionState::path()).openers,
             overlays: Vec::new(),
             folders: mods::scan().into_iter().map(|f| (f.id.clone(), f)).collect(),
             seen,
@@ -1553,7 +1553,7 @@ impl AppWindow {
         // which start hidden so agents can drive a pane in a tab nobody is viewing.
         // Gone or changed: dropped.
         let owned = self.owned_mods();
-        let gone: Vec<_> = self.copies.iter().filter(|(slot, copy)| owned.get(*slot).is_none_or(|inst| *inst != copy.inst)).map(|(slot, _)| slot.clone()).collect();
+        let gone: Vec<_> = self.copies.iter().filter(|(slot, copy)| owned.get(*slot).is_none_or(|inst| !same_copy_instance(&copy.inst, inst))).map(|(slot, _)| slot.clone()).collect();
         for slot in gone {
             self.remove_copy(&slot, window, cx);
         }
@@ -1818,8 +1818,12 @@ impl AppWindow {
         let mut copy = Copy { inst, id: 0, root: None, browser: None, _sub: None, _watch: None, error: None };
         if copy.inst.name == crate::browser::MOD {
             let browser = cx.new(|cx| crate::browser::Browser::new(slot, &copy.inst.props, window, cx));
-            copy._sub = Some(cx.subscribe(&browser, |this, _, ev: &crate::browser::BrowserEvent, cx| match ev {
-                crate::browser::BrowserEvent::MetaChanged => this.publish(cx),
+            let pane_id = slot.to_owned();
+            copy._sub = Some(cx.subscribe(&browser, move |this, _, ev: &crate::browser::BrowserEvent, cx| match ev {
+                crate::browser::BrowserEvent::MetaChanged => {
+                    this.sync_browser_props(&pane_id, cx);
+                    this.publish(cx);
+                }
             }));
             copy.browser = Some(browser);
             return copy;
@@ -1919,7 +1923,14 @@ impl AppWindow {
                                 })
                                 .unwrap_or_else(|| {
                                     let url = props.get("url").and_then(Value::as_str).unwrap_or_default().to_owned();
-                                    (crate::browser::url_label(&url), url)
+                                    let title = props
+                                        .get("title")
+                                        .and_then(Value::as_str)
+                                        .map(str::trim)
+                                        .filter(|t| !t.is_empty() && *t != "Browser" && *t != "about:blank")
+                                        .map(str::to_owned)
+                                        .unwrap_or_else(|| crate::browser::url_label(&url));
+                                    (title, url)
                                 });
                             let is_markdown = props.get("markdown_path").and_then(Value::as_str).is_some();
                             let icon = crate::browser::pane_icon(&url, is_markdown);
@@ -2071,9 +2082,46 @@ impl AppWindow {
         self.open_overlay(mods::new_overlay_id(), spec, window, cx);
     }
 
+    fn sync_browser_props(&mut self, pane: &str, cx: &App) {
+        let Some(browser) = self.copies.get(pane).and_then(|c| c.browser.clone()) else { return };
+        let mut updated = None;
+        self.model.update_mod_props(pane, crate::browser::MOD, |existing| {
+            let next = browser.read(cx).persisted_props(existing);
+            updated = Some(next.clone());
+            next
+        });
+        if let (Some(next), Some(copy)) = (updated, self.copies.get_mut(pane)) {
+            copy.inst.props = next;
+        }
+    }
+
+    fn sync_all_browser_props(&mut self, cx: &App) {
+        let panes: Vec<String> = self
+            .copies
+            .iter()
+            .filter_map(|(slot, copy)| copy.browser.as_ref().map(|_| slot.clone()))
+            .collect();
+        for pane in panes {
+            self.sync_browser_props(&pane, cx);
+        }
+    }
+
+    fn save_browser_state(&mut self) {
+        let mut state = crate::browser::SessionState { openers: self.browser_openers.clone() };
+        if self.documents.get("").is_some_and(|s| s.document.is_some()) {
+            state.prune(|pane| self.model.tab_of(pane).is_some());
+            self.browser_openers = state.openers.clone();
+        }
+        if let Err(error) = state.save_to(&crate::browser::SessionState::path()) {
+            tracing::warn!("cannot save browser-state.json: {error}");
+        }
+    }
+
     /// Finish the accepted edit and any newer projection before the window goes.
     pub fn drain_documents(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         if self.draining { return; }
+        self.sync_all_browser_props(cx);
+        self.save_browser_state();
         self.save();
         self.draining = true;
         QUITTING.store(true, std::sync::atomic::Ordering::SeqCst);
@@ -4263,7 +4311,10 @@ impl AppWindow {
                     }
                     let value = self.control(cmd, window, cx);
                     if matches!(name.as_str(), "browser.open" | "browser.split" | "browser.markdown") {
-                        if let (Some(caller), Some(pane)) = (caller, value["pane"].as_str()) { self.browser_openers.insert(caller, pane.into()); }
+                        if let (Some(caller), Some(pane)) = (caller, value["pane"].as_str()) {
+                            self.browser_openers.insert(caller, pane.into());
+                            self.save_browser_state();
+                        }
                     }
                     let _ = reply.send(value);
                 } else {
@@ -5356,6 +5407,15 @@ fn num_in(v: &Value, k: &str) -> f32 {
 
 /// A floating mod's slot and copy (it's told its float id). `visible` and
 /// `owned_mods` must build the same, or a kept copy is dropped.
+fn same_copy_instance(current: &Instance, next: &Instance) -> bool {
+    if current.name == crate::browser::MOD && next.name == crate::browser::MOD {
+        current.props.get("profile") == next.props.get("profile")
+            && current.props.get("markdown_path") == next.props.get("markdown_path")
+    } else {
+        current == next
+    }
+}
+
 fn float_mod(id: &str, name: &str, props: &Value) -> (String, Instance) {
     let mut props = if props.is_object() { props.clone() } else { json!({}) };
     props["float"] = json!(id);

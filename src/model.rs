@@ -312,6 +312,27 @@ impl Model {
         self.spaces.iter_mut().flat_map(|p| p.tabs.iter_mut()).find(|c| c.root.find(node).is_some())
     }
 
+    /// Update a mod pane's props in place; returns whether the stored value changed.
+    pub fn update_mod_props(
+        &mut self,
+        pane: &str,
+        expected_mod: &str,
+        update: impl FnOnce(&serde_json::Value) -> serde_json::Value,
+    ) -> bool {
+        let Some(tab) = self.tab_of_mut(pane) else { return false };
+        let Some(node) = tab.root.find_mut(pane) else { return false };
+        let crate::layout::Kind::Block { content: Content::Mod { name, props } } = &mut node.kind else { return false };
+        if name != expected_mod {
+            return false;
+        }
+        let next = update(props);
+        if next == *props {
+            return false;
+        }
+        *props = next;
+        true
+    }
+
     /// Adds a space at the end and selects it.
     /// What a space is called: its name, else its first terminal's checkout
     /// (a worktree's own folder; outside git its folder), as Herdr names workspaces.
@@ -1314,5 +1335,32 @@ mod tests {
         assert_eq!(m.active.as_deref(), Some("p1"));
         assert_eq!(m.focused_pane().as_deref(), Some("x1"));
         assert_eq!(m.active_tab().map(|c| addresses(c.shown())).unwrap_or_default(), ["t1"]);
+    }
+
+    #[test]
+    fn update_mod_props_updates_matching_mod_and_ignores_others() {
+        let mut m = model_with_one();
+        m.split_with(
+            "x1",
+            Axis::Row,
+            Node::block(
+                "b1",
+                Content::Mod {
+                    name: "native-browser".into(),
+                    props: serde_json::json!({"url": "https://www.google.com/", "profile": "person"}),
+                },
+            ),
+        );
+        assert!(!m.update_mod_props("b1", "other-mod", |_| serde_json::json!({"url": "https://example.com/"})));
+        assert!(m.update_mod_props("b1", "native-browser", |old| {
+            let mut next = old.clone();
+            next["url"] = serde_json::json!("https://linear.app/");
+            next
+        }));
+        assert!(!m.update_mod_props("b1", "native-browser", |old| old.clone()));
+        let pane = m.tab("c1").unwrap().root.find("b1").unwrap();
+        let Some(Content::Mod { props, .. }) = pane.content() else { panic!("expected mod pane") };
+        assert_eq!(props["url"], "https://linear.app/");
+        assert_eq!(props["profile"], "person");
     }
 }
