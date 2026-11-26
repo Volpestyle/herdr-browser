@@ -7,6 +7,8 @@
 //! every target outside the agent profile, denies browser-level methods that
 //! could reach person sessions or close the app, and pins profile-scoped
 //! methods to the agent profile.
+use super::PointerAction;
+use dispatch2::DispatchQueue;
 use serde_json::{Value, json};
 use std::collections::{HashMap, HashSet};
 use std::fs::File;
@@ -179,6 +181,12 @@ impl Bridge {
                         bridge.dispatch(outs);
                     });
                 }
+                Out::Pointer { target, client, x, y, action } => {
+                    let caller = format!("cdp:{client}");
+                    DispatchQueue::main().exec_async(move || {
+                        super::macos::move_pointer_for_target(&target, Some(&caller), x, y, action);
+                    });
+                }
                 Out::Close(id) => {
                     if let Some(tx) = self.clients.lock().ok().and_then(|c| c.get(&id).cloned()) {
                         let _ = tx.send(None);
@@ -338,6 +346,8 @@ pub enum Out {
     Client(u64, Value),
     /// Open a visible agent pane for Target.createTarget, then answer `id`.
     Open { client: u64, id: Value, url: String },
+    /// Move the visible agent cursor overlay on `target` for a CDP mouse event.
+    Pointer { target: String, client: u64, x: f64, y: f64, action: PointerAction },
     Close(u64),
 }
 
@@ -569,8 +579,38 @@ impl Router {
                 root.clone()
             }
         };
+        let pointer = if target_session != root {
+            self.pointer_event(client, &target_session, &method, &params)
+        } else {
+            None
+        };
         let global = self.id(Pending::Client { client, id, filter, root: target_session == root });
-        vec![Out::Browser(json!({"id": global, "method": method, "params": params, "sessionId": target_session}))]
+        let mut outs = vec![Out::Browser(json!({"id": global, "method": method, "params": params, "sessionId": target_session}))];
+        if let Some(pointer) = pointer {
+            outs.push(pointer);
+        }
+        outs
+    }
+
+    fn pointer_event(&self, client: u64, session: &str, method: &str, params: &Value) -> Option<Out> {
+        if method != "Input.dispatchMouseEvent" {
+            return None;
+        }
+        let action = match params["type"].as_str()? {
+            "mouseMoved" => PointerAction::Move,
+            "mousePressed" => PointerAction::Tap,
+            "mouseWheel" => PointerAction::Scroll,
+            _ => return None,
+        };
+        let x = params["x"].as_f64().filter(|n| n.is_finite())?;
+        let y = params["y"].as_f64().filter(|n| n.is_finite())?;
+        let mut page_session = session;
+        for _ in 0..32 {
+            let Some(parent) = self.parent.get(page_session) else { break };
+            page_session = parent;
+        }
+        let target = self.targets.get(page_session)?.clone();
+        Some(Out::Pointer { target, client, x, y, action })
     }
 
     fn owns_detach(&self, client: u64, params: &Value) -> bool {
@@ -1169,5 +1209,45 @@ mod tests {
         assert!(r.set_agent("AGENT").is_ok());
         assert!(r.set_agent("AGENT").is_ok());
         assert!(r.set_agent("OTHER").is_err());
+    }
+
+    #[test]
+    fn cdp_mouse_events_emit_pointer_overlays_on_owning_page_target() {
+        let mut r = attached_page();
+        let moved = r.from_client(1, json!({
+            "id": 1, "method": "Input.dispatchMouseEvent", "sessionId": "A1",
+            "params": {"type": "mouseMoved", "x": 120.5, "y": 48.0}
+        }));
+        assert_eq!(moved.len(), 2);
+        assert_eq!(moved[1], Out::Pointer { target: "TA".into(), client: 1, x: 120.5, y: 48.0, action: PointerAction::Move });
+
+        let pressed = r.from_client(1, json!({
+            "id": 2, "method": "Input.dispatchMouseEvent", "sessionId": "A1",
+            "params": {"type": "mousePressed", "x": 120.5, "y": 48.0, "button": "left", "clickCount": 1}
+        }));
+        assert_eq!(pressed.len(), 2);
+        assert_eq!(pressed[1], Out::Pointer { target: "TA".into(), client: 1, x: 120.5, y: 48.0, action: PointerAction::Tap });
+
+        // mouseReleased does not emit a duplicate pointer move.
+        let released = r.from_client(1, json!({
+            "id": 3, "method": "Input.dispatchMouseEvent", "sessionId": "A1",
+            "params": {"type": "mouseReleased", "x": 120.5, "y": 48.0, "button": "left", "clickCount": 1}
+        }));
+        assert_eq!(released.len(), 1);
+
+        // Mouse events on a nested iframe session resolve up to the owning page target.
+        let wheel = r.from_client(1, json!({
+            "id": 4, "method": "Input.dispatchMouseEvent", "sessionId": "F1",
+            "params": {"type": "mouseWheel", "x": 200, "y": 300, "deltaX": 0, "deltaY": 120}
+        }));
+        assert_eq!(wheel.len(), 2);
+        assert_eq!(wheel[1], Out::Pointer { target: "TA".into(), client: 1, x: 200.0, y: 300.0, action: PointerAction::Scroll });
+
+        // Missing or non-numeric coordinates do not emit a pointer update.
+        let bad = r.from_client(1, json!({
+            "id": 5, "method": "Input.dispatchMouseEvent", "sessionId": "A1",
+            "params": {"type": "mouseMoved", "x": "oops", "y": 10}
+        }));
+        assert_eq!(bad.len(), 1);
     }
 }

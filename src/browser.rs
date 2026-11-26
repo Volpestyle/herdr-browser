@@ -40,6 +40,19 @@ pub fn is_page_command(name: &str) -> bool {
 
 pub const MOD: &str = "native-browser";
 
+/// What kind of pointer gesture an agent performed on a browser pane.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum PointerAction {
+    /// Built-in CLI click (`browser.click`, `browser.type`, `browser.signin`): glide, then squish + ripple.
+    Click,
+    /// Immediate press (Playwright / CDP `mousePressed`): move and squish + ripple now.
+    Tap,
+    /// Pointer motion (Playwright / CDP `mouseMoved`): smooth glide, no click ripple.
+    Move,
+    /// Scroll gesture (`browser.scroll` or CDP `mouseWheel`): glide to scroll point, no click ripple.
+    Scroll,
+}
+
 /// Whether followed links open here: settings.json `links: "system"` sends them to the default browser.
 pub fn opens_links() -> bool {
     !std::fs::read_to_string(crate::settings::path())
@@ -438,7 +451,10 @@ impl Browser {
 
     fn event(&mut self, event: Event, window: &mut Window, cx: &mut Context<Self>) {
         match event {
-            Event::Ready => {}
+            Event::Ready => {
+                #[cfg(target_os = "macos")]
+                self.sync_target_id(cx);
+            }
             Event::Loading(url) => {
                 self.loading = true;
                 self.auth = None;
@@ -469,6 +485,10 @@ impl Browser {
                 }
                 if self.find_open && !self.find_query.is_empty() {
                     self.run_find(true, false);
+                }
+                #[cfg(target_os = "macos")]
+                if self.host.as_ref().is_some_and(|h| !h.has_page_target()) {
+                    self.sync_target_id(cx);
                 }
                 if url_changed {
                     cx.emit(BrowserEvent::MetaChanged);
@@ -552,6 +572,22 @@ impl Browser {
             }
         }
         cx.notify();
+    }
+
+    #[cfg(target_os = "macos")]
+    fn sync_target_id(&self, cx: &mut Context<Self>) {
+        if self.profile != "agent" {
+            return;
+        }
+        let Some(host) = self.host.as_ref().map(Rc::downgrade) else { return };
+        cx.spawn(async move |_, cx| {
+            let Some(page) = host.upgrade() else { return };
+            let Ok(control) = page.control() else { return };
+            if let Some((target_id, is_page)) = control.target_id(cx.background_executor()).await {
+                page.set_target_id(target_id, is_page);
+            }
+        })
+        .detach();
     }
 
     fn answer(&mut self, login: Option<(String, String)>) {

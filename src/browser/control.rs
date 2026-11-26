@@ -1,5 +1,6 @@
 //! Pane-local, in-process CDP. All calls and observer callbacks stay on CEF's UI thread.
 //! No debugger socket, native input, or window activation is involved.
+use super::PointerAction;
 use base64::Engine as _;
 use cef::*;
 use gpui::{BackgroundExecutor, FutureExt};
@@ -193,9 +194,11 @@ pub struct Control {
     _registration: Registration,
     snapshot: RefCell<Snapshot>,
     busy: Cell<bool>,
-    pointer: Box<dyn Fn(Option<&str>, f64, f64) -> bool>,
+    pointer: Box<dyn Fn(Option<&str>, f64, f64, PointerAction) -> bool>,
     caller: RefCell<Option<String>>,
     cursor: fn(Option<&str>) -> Vec<u8>,
+    idle_ms: fn() -> u64,
+    on_target: Box<dyn Fn(String, bool)>,
     recording: Rc<RefCell<Option<Recording>>>,
     wheeled: Cell<Option<Instant>>,
 }
@@ -207,7 +210,13 @@ impl Drop for Busy<'_> {
 }
 
 impl Control {
-    pub fn new(browser: &Browser, pointer: Box<dyn Fn(Option<&str>, f64, f64) -> bool>, cursor: fn(Option<&str>) -> Vec<u8>) -> Result<Self, String> {
+    pub fn new(
+        browser: &Browser,
+        pointer: Box<dyn Fn(Option<&str>, f64, f64, PointerAction) -> bool>,
+        cursor: fn(Option<&str>) -> Vec<u8>,
+        idle_ms: fn() -> u64,
+        on_target: Box<dyn Fn(String, bool)>,
+    ) -> Result<Self, String> {
         let host = browser.host().ok_or("Browser is closed")?;
         let pending = Rc::new(RefCell::new(HashMap::new()));
         let epoch = Rc::new(Cell::new(0));
@@ -227,9 +236,18 @@ impl Control {
             pointer,
             caller: RefCell::new(None),
             cursor,
+            idle_ms,
+            on_target,
             recording,
             wheeled: Cell::new(None),
         })
+    }
+
+    pub async fn target_id(&self, ex: &BackgroundExecutor) -> Option<(String, bool)> {
+        let info = self.call("Target.getTargetInfo", json!({}), ex).await.ok()?;
+        let target = &info["targetInfo"];
+        let id = target["targetId"].as_str()?.to_string();
+        Some((id, target["type"] == "page"))
     }
 
     async fn call(
@@ -543,7 +561,7 @@ impl Control {
             let expression = format!("window.__herdrRecordAs?.({}, {})", json!(caller.as_deref().unwrap_or_default()), json!(svg));
             self.call("Runtime.evaluate", json!({"expression":expression}), ex).await?;
         }
-        if (self.pointer)(caller.as_deref(), x, y) {
+        if (self.pointer)(caller.as_deref(), x, y, PointerAction::Click) {
             ex.timer(Duration::from_millis(350)).await;
         }
         for kind in ["mousePressed", "mouseReleased"] {
@@ -567,6 +585,13 @@ impl Control {
             before["at"][0].as_f64().ok_or("Page has no viewport")?,
             before["at"][1].as_f64().ok_or("Page has no viewport")?,
         );
+        let caller = self.caller.borrow().clone();
+        if self.recording.borrow().is_some() {
+            let svg = String::from_utf8_lossy(&(self.cursor)(caller.as_deref())).into_owned();
+            let expression = format!("window.__herdrRecordAs?.({}, {})", json!(caller.as_deref().unwrap_or_default()), json!(svg));
+            let _ = self.call("Runtime.evaluate", json!({"expression":expression}), ex).await;
+        }
+        (self.pointer)(caller.as_deref(), x, y, PointerAction::Scroll);
         // Unasked, a page Chromium is not rendering gets the script: a wheel would stall there.
         let script = via.map_or(before["hidden"] == true, |via| via == "script");
         if script && before["frame"] != true {
@@ -636,7 +661,9 @@ impl Control {
         let t0 = now();
         let dir = crate::mods::app_dir().join("recordings").join(format!("{}", (t0 * 1000.) as u64));
         std::fs::create_dir_all(dir.join("frames")).map_err(|e| e.to_string())?;
-        let source = RECORD_CURSOR.replace("__SVG__", &serde_json::to_string(&String::from_utf8_lossy(&(self.cursor)(None))).unwrap_or_default());
+        let source = RECORD_CURSOR
+            .replace("__SVG__", &serde_json::to_string(&String::from_utf8_lossy(&(self.cursor)(None))).unwrap_or_default())
+            .replace("__IDLE_MS__", &(self.idle_ms)().to_string());
         self.call("Page.enable", json!({}), ex).await?;
         let script = self
             .call("Page.addScriptToEvaluateOnNewDocument", json!({"source":source}), ex)
@@ -831,6 +858,9 @@ impl Control {
                 // The pane's own target names the agent profile the bridge exposes.
                 let info = self.call("Target.getTargetInfo", json!({}), ex).await?;
                 let target = &info["targetInfo"];
+                if let Some(id) = target["targetId"].as_str() {
+                    (self.on_target)(id.to_string(), target["type"] == "page");
+                }
                 let context = target["browserContextId"]
                     .as_str()
                     .ok_or("Chromium did not name this page's profile")?;
@@ -1213,12 +1243,17 @@ impl Control {
                 }
                 if !wheel {
                     let node = self.node(args, ex).await?;
-                    self.call(
-                        "DOM.scrollIntoViewIfNeeded",
-                        json!({"backendNodeId":node}),
-                        ex,
-                    )
-                    .await?;
+                    if let Ok((x, y)) = self.point(node, ex).await {
+                        let caller = self.caller.borrow().clone();
+                        (self.pointer)(caller.as_deref(), x, y, PointerAction::Scroll);
+                    } else {
+                        self.call(
+                            "DOM.scrollIntoViewIfNeeded",
+                            json!({"backendNodeId":node}),
+                            ex,
+                        )
+                        .await?;
+                    }
                     return Ok(json!({"ok":true}));
                 }
                 let point = if element {
@@ -1460,6 +1495,7 @@ const RECORD_CURSOR: &str = r#"(() => {
   if (window.__herdrRecordStop) return;
   const cursors = new Map();
   let current = '', svg = __SVG__;
+  const idleMs = __IDLE_MS__;
   const place = (c) => { c.el.style.transform = `translate(${c.x - 4.5}px, ${c.y - 3}px)`; };
   const tick = (c) => {
     c.x += (c.tx - c.x) * 0.45; c.y += (c.ty - c.y) * 0.45;
@@ -1485,7 +1521,7 @@ const RECORD_CURSOR: &str = r#"(() => {
     if (!c.seen) { c.seen = true; c.x = c.tx; c.y = c.ty; place(c); }
     c.el.style.opacity = '1';
     clearTimeout(c.timer);
-    c.timer = setTimeout(() => { c.el.style.opacity = '0'; }, 5000);
+    if (idleMs > 0) c.timer = setTimeout(() => { c.el.style.opacity = '0'; }, idleMs);
     if (!c.moving) { c.moving = true; requestAnimationFrame(() => tick(c)); }
   };
   const ripple = (e) => {

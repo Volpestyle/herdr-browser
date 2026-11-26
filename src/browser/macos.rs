@@ -1,5 +1,5 @@
 //! Native Chromium child views. CEF owns rendering, input and Retina scaling.
-use super::{Event, runtime};
+use super::{Event, PointerAction, runtime};
 use cef::*;
 use gpui::{Bounds, Pixels, Window as GpuiWindow};
 use objc2::{
@@ -21,9 +21,15 @@ use std::{
     rc::Rc,
     sync::{
         Arc,
-        atomic::{AtomicBool, Ordering},
+        atomic::{AtomicBool, AtomicU64, Ordering},
     },
+    time::{Duration, Instant},
 };
+
+#[link(name = "QuartzCore", kind = "framework")]
+unsafe extern "C" {
+    fn CACurrentMediaTime() -> f64;
+}
 
 type Tx = async_channel::Sender<Event>;
 fn page_url(browser: Option<&Browser>) -> String {
@@ -270,9 +276,34 @@ wrap_client! {
         fn find_handler(&self) -> Option<FindHandler> { Some(Find::new(self.tx.clone())) }
     }
 }
+struct CursorSlot {
+    cursor: Retained<AnyObject>,
+    ripple: Retained<AnyObject>,
+    cute: bool,
+    moves: u64,
+    clicks: u64,
+    last_x: f64,
+    last_y: f64,
+}
+
+type CursorSlots = Rc<RefCell<HashMap<String, CursorSlot>>>;
+
+struct TargetHost {
+    id: u64,
+    target_id: Rc<RefCell<Option<String>>>,
+    container: ObjcWeak<NSView>,
+    layers: CursorSlots,
+}
+
+static NEXT_HOST_ID: AtomicU64 = AtomicU64::new(1);
+
 pub struct Host {
+    id: u64,
     browser: runtime::BrowserCell,
     control: RefCell<Option<Rc<super::control::Control>>>,
+    layers: CursorSlots,
+    target_id: Rc<RefCell<Option<String>>>,
+    target_page: Rc<Cell<bool>>,
     closing: Rc<Cell<bool>>,
     container: Retained<NSView>,
     parent: Retained<NSView>,
@@ -289,87 +320,259 @@ pub struct Host {
 const AGENT_CURSOR: &[u8] = br##"<svg xmlns="http://www.w3.org/2000/svg" width="28" height="28" viewBox="0 0 28 28"><path d="M4 3.2 L4 21 Q4 23.2 5.9 21.7 L9.9 18.6 L12.9 24.5 Q13.7 26 15.2 25.3 L16.6 24.6 Q18 23.9 17.3 22.5 L14.4 16.9 L19.4 16.6 Q21.6 16.4 20 14.9 L6 2.2 Q4 0.9 4 3.2 Z" fill="#000" fill-opacity=".5" stroke="#fff" stroke-width="1.8" stroke-linejoin="round"/></svg>"##;
 const CUTE_AGENT_CURSOR: &[u8] = br##"<svg xmlns="http://www.w3.org/2000/svg" width="28" height="28" viewBox="0 0 28 28"><defs><linearGradient id="g" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#B69CFF"/><stop offset="1" stop-color="#7C5CFF"/></linearGradient></defs><path d="M4 3.2 L4 21 Q4 23.2 5.9 21.7 L9.9 18.6 L12.9 24.5 Q13.7 26 15.2 25.3 L16.6 24.6 Q18 23.9 17.3 22.5 L14.4 16.9 L19.4 16.6 Q21.6 16.4 20 14.9 L6 2.2 Q4 0.9 4 3.2 Z" fill="url(#g)" stroke="#fff" stroke-width="1.8" stroke-linejoin="round"/><circle cx="8" cy="11.6" r="1.25" fill="#2A1B5E"/><circle cx="11.5" cy="11.6" r="1.25" fill="#2A1B5E"/><circle cx="8.4" cy="11.1" r=".45" fill="#fff"/><circle cx="11.9" cy="11.1" r=".45" fill="#fff"/><ellipse cx="6.8" cy="14" rx="1.1" ry=".6" fill="#FF8FB8" opacity=".75"/><ellipse cx="12.8" cy="14" rx="1.1" ry=".6" fill="#FF8FB8" opacity=".75"/><path d="M8.9 13.5 Q9.75 14.5 10.6 13.5" fill="none" stroke="#2A1B5E" stroke-width=".8" stroke-linecap="round"/></svg>"##;
 
-fn cute_cursor() -> bool {
-    std::fs::read_to_string(crate::settings::path())
-        .ok()
-        .and_then(|text| serde_json::from_str::<Value>(&text).ok())
-        .is_some_and(|v| v["agent_cursor"] == "cute")
+const DEFAULT_AGENT_CURSOR_IDLE_SECS: f64 = 5.;
+const MAX_AGENT_CURSOR_IDLE_SECS: f64 = 3600.;
+
+#[derive(Clone, Copy, Debug, PartialEq)]
+struct CursorPrefs {
+    cute: bool,
+    /// Seconds before an idle cursor fades out; `0.0` keeps it visible.
+    idle_secs: f64,
 }
 
-const AGENT_CURSOR_IDLE_SECS: f64 = 5.;
+fn parse_cursor_prefs(text: &str) -> CursorPrefs {
+    let v = serde_json::from_str::<Value>(text).ok();
+    let cute = v.as_ref().is_some_and(|v| v["agent_cursor"] == "cute");
+    let idle_secs = v
+        .as_ref()
+        .and_then(|v| v.get("agent_cursor_idle_secs"))
+        .and_then(Value::as_f64)
+        .filter(|n| n.is_finite() && *n >= 0.)
+        .map(|n| n.min(MAX_AGENT_CURSOR_IDLE_SECS))
+        .unwrap_or(DEFAULT_AGENT_CURSOR_IDLE_SECS);
+    CursorPrefs { cute, idle_secs }
+}
 
 const AGENT_COLORS: [&str; 8] = ["#3E63DD", "#E5484D", "#30A46C", "#F76B15", "#8E4EC6", "#12A594", "#D6409F", "#C29B00"];
 
 thread_local! {
     static AGENT_COLOR_SLOTS: RefCell<HashMap<String, usize>> = RefCell::new(HashMap::new());
+    static CURSOR_PREFS_CACHE: RefCell<Option<(Instant, CursorPrefs)>> = const { RefCell::new(None) };
+    static TARGET_HOSTS: RefCell<Vec<TargetHost>> = const { RefCell::new(Vec::new()) };
 }
 
-fn agent_cursor(caller: Option<&str>) -> Vec<u8> {
-    let svg = String::from_utf8_lossy(if cute_cursor() { CUTE_AGENT_CURSOR } else { AGENT_CURSOR }).into_owned();
-    let Some(caller) = caller else { return svg.into_bytes() };
+fn cursor_prefs() -> CursorPrefs {
+    CURSOR_PREFS_CACHE.with(|cache| {
+        let now = Instant::now();
+        if let Some((at, prefs)) = *cache.borrow()
+            && now.duration_since(at) < Duration::from_millis(500)
+        {
+            return prefs;
+        }
+        let prefs = std::fs::read_to_string(crate::settings::path())
+            .map(|text| parse_cursor_prefs(&text))
+            .unwrap_or(CursorPrefs { cute: false, idle_secs: DEFAULT_AGENT_CURSOR_IDLE_SECS });
+        *cache.borrow_mut() = Some((now, prefs));
+        prefs
+    })
+}
+
+pub(super) fn cursor_idle_ms() -> u64 {
+    (cursor_prefs().idle_secs * 1000.).round() as u64
+}
+
+fn agent_color(caller: Option<&str>) -> Option<&'static str> {
+    let caller = caller?;
     let slot = AGENT_COLOR_SLOTS.with(|slots| {
         let mut slots = slots.borrow_mut();
         let next = slots.len();
         *slots.entry(caller.to_owned()).or_insert(next)
     });
-    let fill = format!(r#"fill="{}""#, AGENT_COLORS[slot % AGENT_COLORS.len()]);
+    Some(AGENT_COLORS[slot % AGENT_COLORS.len()])
+}
+
+fn agent_cursor_svg(caller: Option<&str>, cute: bool) -> Vec<u8> {
+    let svg = String::from_utf8_lossy(if cute { CUTE_AGENT_CURSOR } else { AGENT_CURSOR }).into_owned();
+    let Some(color) = agent_color(caller) else { return svg.into_bytes() };
+    let fill = format!(r#"fill="{color}""#);
     svg.replace(r##"fill="#000" fill-opacity=".5""##, &fill).replace(r#"fill="url(#g)""#, &fill).into_bytes()
 }
 
-fn move_pointer(container: &NSView, slots: &RefCell<HashMap<String, Retained<AnyObject>>>, caller: Option<&str>, x: f64, y: f64) -> bool {
+fn agent_ripple_svg(caller: Option<&str>) -> Vec<u8> {
+    let color = agent_color(caller).unwrap_or("#111");
+    format!(
+        r##"<svg xmlns="http://www.w3.org/2000/svg" width="32" height="32" viewBox="0 0 32 32"><circle cx="16" cy="16" r="12" fill="none" stroke="#fff" stroke-opacity=".85" stroke-width="3.6"/><circle cx="16" cy="16" r="12" fill="none" stroke="{color}" stroke-opacity=".95" stroke-width="2"/></svg>"##
+    )
+    .into_bytes()
+}
+
+fn agent_cursor(caller: Option<&str>) -> Vec<u8> {
+    agent_cursor_svg(caller, cursor_prefs().cute)
+}
+
+unsafe fn set_layer_svg(layer: &AnyObject, svg: &[u8], size: NSSize, scale: f64) {
+    let data: *mut AnyObject = msg_send![class!(NSData), dataWithBytes: svg.as_ptr().cast::<std::ffi::c_void>(), length: svg.len()];
+    let alloc: *mut AnyObject = msg_send![class!(NSImage), alloc];
+    let raw: *mut AnyObject = msg_send![alloc, initWithData: data];
+    if let Some(image) = unsafe { Retained::<AnyObject>::from_raw(raw) } {
+        let _: () = msg_send![&*image, setSize: size];
+        let _: () = msg_send![layer, setContents: &*image];
+        let _: () = msg_send![layer, setContentsScale: scale];
+    }
+}
+
+pub(super) fn move_pointer_for_target(
+    target_id: &str,
+    caller: Option<&str>,
+    x: f64,
+    y: f64,
+    action: PointerAction,
+) -> bool {
+    let matched = TARGET_HOSTS.with(|hosts| {
+        hosts
+            .borrow()
+            .iter()
+            .find(|h| h.target_id.borrow().as_deref() == Some(target_id))
+            .and_then(|h| Some((h.container.load()?, h.layers.clone())))
+    });
+    let Some((container, layers)) = matched else {
+        return false;
+    };
+    move_pointer(&container, &layers, caller, x, y, action)
+}
+
+fn move_pointer(
+    container: &NSView,
+    slots: &RefCell<HashMap<String, CursorSlot>>,
+    caller: Option<&str>,
+    x: f64,
+    y: f64,
+    action: PointerAction,
+) -> bool {
+    if !x.is_finite() || !y.is_finite() {
+        return false;
+    }
     let Some(window) = container.window() else { return false };
     if container.isHidden() || !window.isVisible() {
         return false;
     }
+    let prefs = cursor_prefs();
     let position = NSPoint::new(x, container.bounds().size.height - y);
+    let scale = window.backingScaleFactor();
     let mut slots = slots.borrow_mut();
     let key = caller.unwrap_or_default().to_owned();
     let fresh = !slots.contains_key(&key);
     unsafe {
-        let layer = slots.entry(key).or_insert_with(|| {
+        if fresh {
             container.setWantsLayer(true);
-            let svg = agent_cursor(caller);
-            let data: *mut AnyObject = msg_send![class!(NSData), dataWithBytes: svg.as_ptr().cast::<std::ffi::c_void>(), length: svg.len()];
-            let image: *mut AnyObject = msg_send![class!(NSImage), alloc];
-            let image: *mut AnyObject = msg_send![image, initWithData: data];
-            let size = NSSize::new(28., 28.);
-            let _: () = msg_send![image, setSize: size];
-            let hot = NSPoint::new(4.5, 3.);
-            let layer: Retained<AnyObject> = msg_send![class!(CALayer), layer];
-            let _: () = msg_send![&*layer, setBounds: NSRect::new(NSPoint::new(0., 0.), size)];
-            let _: () = msg_send![&*layer, setAnchorPoint: NSPoint::new(hot.x / size.width, 1. - hot.y / size.height)];
-            let _: () = msg_send![&*layer, setContents: image];
-            let _: () = msg_send![&*layer, setContentsScale: window.backingScaleFactor()];
-            let _: () = msg_send![&*layer, setZPosition: 1e6_f64];
-            let _: () = msg_send![&*layer, setOpacity: 0_f32];
-            let _: () = msg_send![&*layer, setShadowOpacity: 0.35_f32];
-            let _: () = msg_send![&*layer, setShadowRadius: 3_f64];
-            let _: () = msg_send![&*layer, setShadowOffset: NSSize::new(0., -1.)];
             let root: *mut AnyObject = msg_send![container, layer];
-            let _: () = msg_send![root, addSublayer: &*layer];
-            layer
-        });
+            if root.is_null() {
+                return false;
+            }
+            let ripple_size = NSSize::new(32., 32.);
+            let ripple: Retained<AnyObject> = msg_send![class!(CALayer), layer];
+            let _: () = msg_send![&*ripple, setBounds: NSRect::new(NSPoint::new(0., 0.), ripple_size)];
+            let _: () = msg_send![&*ripple, setAnchorPoint: NSPoint::new(0.5, 0.5)];
+            set_layer_svg(&ripple, &agent_ripple_svg(caller), ripple_size, scale);
+            let _: () = msg_send![&*ripple, setZPosition: 999_999_f64];
+            let _: () = msg_send![&*ripple, setOpacity: 0_f32];
+            let _: () = msg_send![root, addSublayer: &*ripple];
+
+            let size = NSSize::new(28., 28.);
+            let hot = NSPoint::new(4.5, 3.);
+            let cursor: Retained<AnyObject> = msg_send![class!(CALayer), layer];
+            let _: () = msg_send![&*cursor, setBounds: NSRect::new(NSPoint::new(0., 0.), size)];
+            let _: () = msg_send![&*cursor, setAnchorPoint: NSPoint::new(hot.x / size.width, 1. - hot.y / size.height)];
+            set_layer_svg(&cursor, &agent_cursor_svg(caller, prefs.cute), size, scale);
+            let _: () = msg_send![&*cursor, setZPosition: 1e6_f64];
+            let _: () = msg_send![&*cursor, setOpacity: 0_f32];
+            let _: () = msg_send![&*cursor, setShadowOpacity: 0.35_f32];
+            let _: () = msg_send![&*cursor, setShadowRadius: 3_f64];
+            let _: () = msg_send![&*cursor, setShadowOffset: NSSize::new(0., -1.)];
+            let _: () = msg_send![root, addSublayer: &*cursor];
+
+            slots.insert(
+                key.clone(),
+                CursorSlot { cursor, ripple, cute: prefs.cute, moves: 0, clicks: 0, last_x: x, last_y: y },
+            );
+        }
+        let slot = slots.get_mut(&key).expect("cursor slot");
+        if slot.cute != prefs.cute {
+            set_layer_svg(&slot.cursor, &agent_cursor_svg(caller, prefs.cute), NSSize::new(28., 28.), scale);
+            slot.cute = prefs.cute;
+        }
+        let glide = match action {
+            PointerAction::Click => 0.3_f64,
+            PointerAction::Scroll => 0.2_f64,
+            PointerAction::Move => 0.12_f64,
+            PointerAction::Tap => 0.1_f64,
+        };
         let _: () = msg_send![class!(CATransaction), begin];
         let _: () = msg_send![class!(CATransaction), setDisableActions: fresh];
-        let _: () = msg_send![class!(CATransaction), setAnimationDuration: 0.3_f64];
-        let _: () = msg_send![&**layer, setPosition: position];
+        let _: () = msg_send![class!(CATransaction), setAnimationDuration: glide];
+        let _: () = msg_send![&*slot.cursor, setPosition: position];
         let _: () = msg_send![class!(CATransaction), commit];
-        let squish: *mut AnyObject = msg_send![class!(CABasicAnimation), animationWithKeyPath: &*NSString::from_str("transform.scale")];
-        let from: *mut AnyObject = msg_send![class!(NSNumber), numberWithDouble: 0.75_f64];
-        let now: f64 = msg_send![&**layer, convertTime: 0_f64, fromLayer: std::ptr::null::<AnyObject>()];
-        let _: () = msg_send![squish, setFromValue: from];
-        let _: () = msg_send![squish, setDuration: 0.25_f64];
-        let _: () = msg_send![squish, setBeginTime: now + if fresh { 0.05 } else { 0.32 }];
-        let _: () = msg_send![&**layer, addAnimation: squish, forKey: &*NSString::from_str("squish")];
-        let fade: *mut AnyObject = msg_send![class!(CABasicAnimation), animationWithKeyPath: &*NSString::from_str("opacity")];
-        let shown: *mut AnyObject = msg_send![class!(NSNumber), numberWithDouble: 1_f64];
-        let _: () = msg_send![fade, setFromValue: shown];
-        let hidden: *mut AnyObject = msg_send![class!(NSNumber), numberWithDouble: 0_f64];
-        let _: () = msg_send![fade, setToValue: hidden];
-        let _: () = msg_send![fade, setBeginTime: now + AGENT_CURSOR_IDLE_SECS];
-        let _: () = msg_send![fade, setDuration: 0.4_f64];
-        let _: () = msg_send![fade, setFillMode: &*NSString::from_str("backwards")];
-        let _: () = msg_send![&**layer, addAnimation: fade, forKey: &*NSString::from_str("fade")];
+
+        let media_now = CACurrentMediaTime();
+        let now: f64 = msg_send![&*slot.cursor, convertTime: media_now, fromLayer: std::ptr::null::<AnyObject>()];
+
+        if matches!(action, PointerAction::Click | PointerAction::Tap) {
+            let delay = match action {
+                PointerAction::Click => if fresh { 0.05 } else { 0.32 },
+                _ => 0.0,
+            };
+            let squish: *mut AnyObject = msg_send![class!(CABasicAnimation), animationWithKeyPath: &*NSString::from_str("transform.scale")];
+            let from: *mut AnyObject = msg_send![class!(NSNumber), numberWithDouble: 0.75_f64];
+            let to: *mut AnyObject = msg_send![class!(NSNumber), numberWithDouble: 1.0_f64];
+            let _: () = msg_send![squish, setFromValue: from];
+            let _: () = msg_send![squish, setToValue: to];
+            let _: () = msg_send![squish, setDuration: 0.25_f64];
+            let _: () = msg_send![squish, setBeginTime: now + delay];
+            let _: () = msg_send![&*slot.cursor, addAnimation: squish, forKey: &*NSString::from_str("squish")];
+
+            let _: () = msg_send![class!(CATransaction), begin];
+            let _: () = msg_send![class!(CATransaction), setDisableActions: true];
+            let _: () = msg_send![&*slot.ripple, setPosition: position];
+            let _: () = msg_send![class!(CATransaction), commit];
+
+            let rnow: f64 = msg_send![&*slot.ripple, convertTime: media_now, fromLayer: std::ptr::null::<AnyObject>()];
+            let ease: *mut AnyObject = msg_send![class!(CAMediaTimingFunction), functionWithName: &*NSString::from_str("easeOut")];
+            let rscale: *mut AnyObject = msg_send![class!(CABasicAnimation), animationWithKeyPath: &*NSString::from_str("transform.scale")];
+            let sfrom: *mut AnyObject = msg_send![class!(NSNumber), numberWithDouble: 0.5_f64];
+            let sto: *mut AnyObject = msg_send![class!(NSNumber), numberWithDouble: 1.9_f64];
+            let _: () = msg_send![rscale, setFromValue: sfrom];
+            let _: () = msg_send![rscale, setToValue: sto];
+            let _: () = msg_send![rscale, setDuration: 0.45_f64];
+            let _: () = msg_send![rscale, setBeginTime: rnow + delay];
+            let _: () = msg_send![rscale, setTimingFunction: ease];
+            let _: () = msg_send![&*slot.ripple, addAnimation: rscale, forKey: &*NSString::from_str("rippleScale")];
+
+            let ropacity: *mut AnyObject = msg_send![class!(CABasicAnimation), animationWithKeyPath: &*NSString::from_str("opacity")];
+            let ofrom: *mut AnyObject = msg_send![class!(NSNumber), numberWithDouble: 0.95_f64];
+            let oto: *mut AnyObject = msg_send![class!(NSNumber), numberWithDouble: 0.0_f64];
+            let _: () = msg_send![ropacity, setFromValue: ofrom];
+            let _: () = msg_send![ropacity, setToValue: oto];
+            let _: () = msg_send![ropacity, setDuration: 0.45_f64];
+            let _: () = msg_send![ropacity, setBeginTime: rnow + delay];
+            let _: () = msg_send![ropacity, setTimingFunction: ease];
+            let _: () = msg_send![&*slot.ripple, addAnimation: ropacity, forKey: &*NSString::from_str("rippleOpacity")];
+            slot.clicks += 1;
+        }
+
+        if prefs.idle_secs == 0. {
+            let _: () = msg_send![&*slot.cursor, removeAnimationForKey: &*NSString::from_str("fade")];
+            let _: () = msg_send![class!(CATransaction), begin];
+            let _: () = msg_send![class!(CATransaction), setDisableActions: true];
+            let _: () = msg_send![&*slot.cursor, setOpacity: 1_f32];
+            let _: () = msg_send![class!(CATransaction), commit];
+        } else {
+            let _: () = msg_send![class!(CATransaction), begin];
+            let _: () = msg_send![class!(CATransaction), setDisableActions: true];
+            let _: () = msg_send![&*slot.cursor, setOpacity: 0_f32];
+            let _: () = msg_send![class!(CATransaction), commit];
+            let fade: *mut AnyObject = msg_send![class!(CABasicAnimation), animationWithKeyPath: &*NSString::from_str("opacity")];
+            let shown: *mut AnyObject = msg_send![class!(NSNumber), numberWithDouble: 1_f64];
+            let _: () = msg_send![fade, setFromValue: shown];
+            let hidden: *mut AnyObject = msg_send![class!(NSNumber), numberWithDouble: 0_f64];
+            let _: () = msg_send![fade, setToValue: hidden];
+            let _: () = msg_send![fade, setBeginTime: now + prefs.idle_secs];
+            let _: () = msg_send![fade, setDuration: 0.4_f64];
+            let _: () = msg_send![fade, setFillMode: &*NSString::from_str("backwards")];
+            let _: () = msg_send![&*slot.cursor, addAnimation: fade, forKey: &*NSString::from_str("fade")];
+        }
+        slot.moves += 1;
+        slot.last_x = x;
+        slot.last_y = y;
     }
     true
 }
@@ -666,9 +869,25 @@ impl Host {
                 &block,
             )
         };
+        let id = NEXT_HOST_ID.fetch_add(1, Ordering::Relaxed);
+        let layers = Rc::new(RefCell::new(HashMap::new()));
+        let target_id = Rc::new(RefCell::new(None));
+        let target_page = Rc::new(Cell::new(false));
+        TARGET_HOSTS.with(|hosts| {
+            hosts.borrow_mut().push(TargetHost {
+                id,
+                target_id: target_id.clone(),
+                container: ObjcWeak::from_retained(&container),
+                layers: layers.clone(),
+            });
+        });
         Ok(Self {
+            id,
             browser,
             control: RefCell::new(None),
+            layers,
+            target_id,
+            target_page,
             closing,
             container,
             parent,
@@ -686,17 +905,35 @@ impl Host {
     pub fn starting(&self) -> bool {
         !self.closing.get() && self.browser.borrow().is_none()
     }
+    pub fn has_page_target(&self) -> bool {
+        self.target_page.get()
+    }
+    pub fn set_target_id(&self, target_id: String, is_page: bool) {
+        *self.target_id.borrow_mut() = Some(target_id);
+        if is_page {
+            self.target_page.set(true);
+        }
+    }
     pub fn control(&self) -> Result<Rc<super::control::Control>, String> {
         if let Some(control) = self.control.borrow().as_ref() {
             return Ok(control.clone());
         }
         let browser = self.browser.borrow();
         let container = self.container.clone();
-        let layers = RefCell::new(HashMap::new());
+        let layers = self.layers.clone();
+        let target_id = self.target_id.clone();
+        let target_page = self.target_page.clone();
         let control = Rc::new(super::control::Control::new(
             browser.as_ref().ok_or("Browser is closed")?,
-            Box::new(move |caller, x, y| move_pointer(&container, &layers, caller, x, y)),
+            Box::new(move |caller, x, y, action| move_pointer(&container, &layers, caller, x, y, action)),
             agent_cursor,
+            cursor_idle_ms,
+            Box::new(move |id, is_page| {
+                *target_id.borrow_mut() = Some(id);
+                if is_page {
+                    target_page.set(true);
+                }
+            }),
         )?);
         *self.control.borrow_mut() = Some(control.clone());
         Ok(control)
@@ -833,12 +1070,22 @@ impl Host {
     pub fn inspect(&self) -> Value {
         let browser = self.browser.borrow();
         let browser = browser.as_ref();
-        json!({"url":page_url(browser), "bounds":self.bounds.get(), "shown":self.shown.get(), "cut":self.cut.get(), "focused":self.is_focused(), "window":self.window.windowNumber(), "scale_factor":self.window.backingScaleFactor(), "window_visible":self.window.isVisible(), "window_key":self.window.isKeyWindow(), "parent_hidden":self.parent.isHidden(), "parent_bounds":[self.parent.bounds().size.width,self.parent.bounds().size.height], "can_go_back":browser.is_some_and(|b| b.can_go_back() != 0), "can_go_forward":browser.is_some_and(|b| b.can_go_forward() != 0), "active_browsers":runtime::ACTIVE.load(Ordering::Relaxed), "pump_ticks":runtime::TICKS.load(Ordering::Relaxed)})
+        let slots = self.layers.borrow();
+        let cursor_moves: u64 = slots.values().map(|s| s.moves).sum();
+        let cursor_clicks: u64 = slots.values().map(|s| s.clicks).sum();
+        let agent_cursors = json!({
+            "count": slots.len(),
+            "moves": cursor_moves,
+            "clicks": cursor_clicks,
+        });
+        drop(slots);
+        json!({"url":page_url(browser), "bounds":self.bounds.get(), "shown":self.shown.get(), "cut":self.cut.get(), "focused":self.is_focused(), "window":self.window.windowNumber(), "scale_factor":self.window.backingScaleFactor(), "window_visible":self.window.isVisible(), "window_key":self.window.isKeyWindow(), "parent_hidden":self.parent.isHidden(), "parent_bounds":[self.parent.bounds().size.width,self.parent.bounds().size.height], "can_go_back":browser.is_some_and(|b| b.can_go_back() != 0), "can_go_forward":browser.is_some_and(|b| b.can_go_forward() != 0), "active_browsers":runtime::ACTIVE.load(Ordering::Relaxed), "pump_ticks":runtime::TICKS.load(Ordering::Relaxed), "agent_cursors":agent_cursors})
     }
 }
 impl Drop for Host {
     fn drop(&mut self) {
         self.closing.set(true);
+        TARGET_HOSTS.with(|hosts| hosts.borrow_mut().retain(|h| h.id != self.id));
         if let Some(monitor) = self.monitor.take() {
             unsafe {
                 NSEvent::removeMonitor(&monitor);
@@ -851,7 +1098,41 @@ impl Drop for Host {
 }
 #[cfg(test)]
 mod tests {
-    use super::{ctrl_cmd_shortcut, ctrl_shortcut, download_url, shortcut};
+    use super::{
+        CursorPrefs, DEFAULT_AGENT_CURSOR_IDLE_SECS, MAX_AGENT_CURSOR_IDLE_SECS,
+        agent_ripple_svg, ctrl_cmd_shortcut, ctrl_shortcut, download_url, parse_cursor_prefs,
+        shortcut,
+    };
+    #[test]
+    fn cursor_prefs_parses_style_and_idle_timeout() {
+        assert_eq!(
+            parse_cursor_prefs("{}"),
+            CursorPrefs { cute: false, idle_secs: DEFAULT_AGENT_CURSOR_IDLE_SECS }
+        );
+        assert_eq!(
+            parse_cursor_prefs(r#"{"agent_cursor":"cute","agent_cursor_idle_secs":0}"#),
+            CursorPrefs { cute: true, idle_secs: 0.0 }
+        );
+        assert_eq!(
+            parse_cursor_prefs(r#"{"agent_cursor_idle_secs":15.5}"#),
+            CursorPrefs { cute: false, idle_secs: 15.5 }
+        );
+        assert_eq!(
+            parse_cursor_prefs(r#"{"agent_cursor_idle_secs":-3}"#),
+            CursorPrefs { cute: false, idle_secs: DEFAULT_AGENT_CURSOR_IDLE_SECS }
+        );
+        assert_eq!(
+            parse_cursor_prefs(r#"{"agent_cursor_idle_secs":99999}"#),
+            CursorPrefs { cute: false, idle_secs: MAX_AGENT_CURSOR_IDLE_SECS }
+        );
+    }
+    #[test]
+    fn agent_ripple_svg_uses_caller_color() {
+        let a = String::from_utf8(agent_ripple_svg(Some("caller-alpha"))).unwrap();
+        let b = String::from_utf8(agent_ripple_svg(Some("caller-beta"))).unwrap();
+        assert_ne!(a, b);
+        assert!(a.contains("<circle") && a.contains(r##"stroke="#fff""##));
+    }
     #[test]
     fn download_url_allows_web_and_web_origin_blob_urls_only() {
         assert!(download_url("https://developer.apple.com/cert.cer"));

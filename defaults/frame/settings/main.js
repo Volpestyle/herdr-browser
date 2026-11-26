@@ -574,7 +574,46 @@ export default class Settings extends View {
               else p.links = "system";
             }, cx)),
         ),
-      );
+      )
+      .child(div().h(18))
+      .child(this.heading(t, "Agent cursors"))
+      .child(
+        this.row(
+          t,
+          "Cute agent cursor",
+          "Use the brighter purple cursor with a face when agents drive visible browser panes.",
+          this.toggle(t, "st-agent-cursor", this.person.agent_cursor === "cute", (_e, cx) =>
+            this.change((p) => {
+              if (p.agent_cursor === "cute") delete p.agent_cursor;
+              else p.agent_cursor = "cute";
+            }, cx)),
+        ),
+      )
+      .child((() => {
+        const steps = [5, 10, 15, 30, 60, 0];
+        const raw = this.person.agent_cursor_idle_secs;
+        const idle = typeof raw === "number" && Number.isFinite(raw) && raw >= 0 ? raw : 5;
+        const label = idle === 0 ? "Always" : `${Math.round(idle)}s`;
+        const stepIdle = (dir) => (_e, cx) => this.change((p) => {
+          const idx = steps.indexOf(idle);
+          let next;
+          if (idx !== -1) {
+            next = steps[Math.max(0, Math.min(steps.length - 1, idx + dir))];
+          } else if (dir > 0) {
+            next = steps.find((v) => v > idle) ?? 0;
+          } else {
+            next = [...steps].reverse().find((v) => v > 0 && v < idle) ?? 5;
+          }
+          if (next === 5) delete p.agent_cursor_idle_secs;
+          else p.agent_cursor_idle_secs = next;
+        }, cx);
+        return this.row(
+          t,
+          "Keep cursor visible",
+          "How long an agent's cursor stays on screen after moving or clicking. Always keeps it visible until the pane closes.",
+          this.stepper(t, "st-agent-cursor-idle", label, stepIdle(-1), stepIdle(1)),
+        );
+      })());
   }
 
   keyboard(t) {
