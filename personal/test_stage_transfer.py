@@ -176,6 +176,37 @@ class StageTransferTests(unittest.TestCase):
         with self.assertRaisesRegex(recv.StageError, 'Setuid'):
             recv.receive_stage(buf3, local_dir=self.local, req_provider=lambda: 'req', verifier=lambda _b, _r: None)
 
+        # 4. Chained symlink traversal (each symlink looks lexical-safe on its own)
+        s1 = tarfile.TarInfo('Herdr Browser.app/a/b')
+        s1.type = tarfile.SYMTYPE
+        s1.linkname = '..'
+        s2 = tarfile.TarInfo('Herdr Browser.app/a/b/c')
+        s2.type = tarfile.SYMTYPE
+        s2.linkname = '..'
+        write_through = tarfile.TarInfo('Herdr Browser.app/a/b/c/escaped.txt')
+        buf4 = tar_bytes([(meta_info, meta_bytes), (s1, None), (s2, None), (write_through, b'nope')])
+        with self.assertRaisesRegex(recv.StageError, 'traverses symlink'):
+            recv.receive_stage(buf4, local_dir=self.local, req_provider=lambda: 'req', verifier=lambda _b, _r: None)
+        self.assertFalse((self.local / 'escaped.txt').exists())
+
+        # 5. Multi-hop symlink chain resolving outside bundle without traversing symlink prefix
+        h1 = tarfile.TarInfo('Herdr Browser.app/d1/up')
+        h1.type = tarfile.SYMTYPE
+        h1.linkname = '..'
+        h2 = tarfile.TarInfo('Herdr Browser.app/d2/escape')
+        h2.type = tarfile.SYMTYPE
+        h2.linkname = '../d1/up/..'
+        buf5 = tar_bytes([(meta_info, meta_bytes), (h1, None), (h2, None)])
+        with self.assertRaisesRegex(recv.StageError, 'escapes'):
+            recv.receive_stage(buf5, local_dir=self.local, req_provider=lambda: 'req', verifier=lambda _b, _r: None)
+
+        # 6. Duplicate archive member refused
+        f1 = tarfile.TarInfo('Herdr Browser.app/Contents/dup')
+        f2 = tarfile.TarInfo('Herdr Browser.app/Contents/dup')
+        buf6 = tar_bytes([(meta_info, meta_bytes), (f1, b'one'), (f2, b'two')])
+        with self.assertRaisesRegex(recv.StageError, 'Duplicate'):
+            recv.receive_stage(buf6, local_dir=self.local, req_provider=lambda: 'req', verifier=lambda _b, _r: None)
+
     def test_real_codesign_verify_on_installed_app_if_present(self):
         installed = Path.home() / 'Applications' / 'Herdr Browser.app'
         if not installed.is_dir():

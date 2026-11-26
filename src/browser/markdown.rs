@@ -296,7 +296,20 @@ fn check_host_and_origin(req: &Request, port: u16) -> Result<(), &'static str> {
     Ok(())
 }
 
+const ASSET_CSP: &str = "default-src 'none'; style-src 'unsafe-inline'; sandbox";
+
 fn write_response(stream: &mut TcpStream, status: u16, content_type: &str, body: &[u8], head_only: bool) -> std::io::Result<()> {
+    write_response_with_csp(stream, status, content_type, Some(ASSET_CSP), body, head_only)
+}
+
+fn write_response_with_csp(
+    stream: &mut TcpStream,
+    status: u16,
+    content_type: &str,
+    csp: Option<&str>,
+    body: &[u8],
+    head_only: bool,
+) -> std::io::Result<()> {
     let reason = match status {
         200 => "OK",
         400 => "Bad Request",
@@ -306,16 +319,19 @@ fn write_response(stream: &mut TcpStream, status: u16, content_type: &str, body:
         413 => "Payload Too Large",
         _ => "Internal Server Error",
     };
-    let header = format!(
+    let mut header = format!(
         "HTTP/1.1 {status} {reason}\r\n\
          Content-Type: {content_type}\r\n\
          Content-Length: {}\r\n\
          Cache-Control: no-store\r\n\
          X-Content-Type-Options: nosniff\r\n\
-         Referrer-Policy: no-referrer\r\n\
-         Connection: close\r\n\r\n",
+         Referrer-Policy: no-referrer\r\n",
         body.len()
     );
+    if let Some(policy) = csp {
+        header.push_str(&format!("Content-Security-Policy: {policy}\r\n"));
+    }
+    header.push_str("Connection: close\r\n\r\n");
     stream.write_all(header.as_bytes())?;
     if !head_only && !body.is_empty() {
         stream.write_all(body)?;
@@ -407,11 +423,15 @@ fn serve_asset(stream: &mut TcpStream, entry: &RootEntry, token: &str, sub_path:
         return;
     };
     if file_path.is_dir() {
-        let Some(readme) = find_readme(&file_path) else {
+        let Some(readme) = find_readme(&entry.root_dir, &file_path) else {
             let _ = write_response(stream, 404, "text/plain; charset=utf-8", b"not found", head_only);
             return;
         };
         file_path = readme;
+    }
+    if !file_path.starts_with(&entry.root_dir) {
+        let _ = write_response(stream, 403, "text/plain; charset=utf-8", b"path escapes the preview root", head_only);
+        return;
     }
     let Ok(meta) = fs::metadata(&file_path) else {
         let _ = write_response(stream, 404, "text/plain; charset=utf-8", b"not found", head_only);
@@ -426,8 +446,23 @@ fn serve_asset(stream: &mut TcpStream, entry: &RootEntry, token: &str, sub_path:
         let title = file_path.file_name().and_then(|n| n.to_str()).unwrap_or("Markdown");
         let root_name = entry.root_dir.file_name().and_then(|n| n.to_str()).unwrap_or("root");
         let doc_url_path = to_url_path(&entry.root_dir, &file_path).unwrap_or_else(|_| "/".into());
-        let html = render_page(title, root_name, &format!("/{token}"), &doc_url_path);
-        let _ = write_response(stream, 200, "text/html; charset=utf-8", html.as_bytes(), head_only);
+        let nonce = random_nonce();
+        let html = render_page(title, root_name, &format!("/{token}"), &doc_url_path, &nonce);
+        let csp = format!(
+            "default-src 'none'; \
+             script-src 'nonce-{nonce}' 'self' https://cdn.jsdelivr.net; \
+             style-src 'self' 'unsafe-inline' https://cdn.jsdelivr.net; \
+             img-src 'self' https: http: data: blob:; \
+             media-src 'self' data: blob:; \
+             font-src 'self' data:; \
+             connect-src 'self'; \
+             object-src 'none'; \
+             frame-src 'none'; \
+             base-uri 'none'; \
+             form-action 'none'; \
+             frame-ancestors 'none'"
+        );
+        let _ = write_response_with_csp(stream, 200, "text/html; charset=utf-8", Some(&csp), html.as_bytes(), head_only);
         return;
     }
     if meta.len() > MAX_ASSET_BYTES {
@@ -526,10 +561,11 @@ fn serve_events(stream: &mut TcpStream, entry: &RootEntry, query_path: &str) {
     }
 }
 
-fn render_page(title: &str, root_name: &str, base_path: &str, doc_url_path: &str) -> String {
+fn render_page(title: &str, root_name: &str, base_path: &str, doc_url_path: &str, nonce: &str) -> String {
     let base_json = serde_json::to_string(base_path).unwrap_or_else(|_| "\"\"".into());
     let doc_json = serde_json::to_string(doc_url_path).unwrap_or_else(|_| "\"/\"".into());
     PAGE_HTML
+        .replace("{{NONCE}}", nonce)
         .replace("{{TITLE}}", &escape_html(title))
         .replace("{{ROOT_NAME}}", &escape_html(root_name))
         .replace("{{BASE_PATH_JSON}}", &base_json)
@@ -571,8 +607,8 @@ fn resolve_target(raw: &str) -> Result<(PathBuf, PathBuf), String> {
         PathBuf::from(trimmed)
     };
     let canonical = fs::canonicalize(&path).map_err(|e| format!("Cannot open {}: {e}", path.display()))?;
-    let (doc_path, requested_root) = if canonical.is_dir() {
-        let start = find_start_doc(&canonical)
+    let (doc_path, root_dir) = if canonical.is_dir() {
+        let start = find_start_doc(&canonical, &canonical)
             .ok_or_else(|| format!("No Markdown or image file found in {}", canonical.display()))?;
         (start, canonical)
     } else {
@@ -585,26 +621,25 @@ fn resolve_target(raw: &str) -> Result<(PathBuf, PathBuf), String> {
             .to_path_buf();
         (canonical, parent)
     };
-    let root_dir = std::env::home_dir()
-        .map(|h| h.join("Documents"))
-        .and_then(|d| fs::canonicalize(d).ok())
-        .filter(|docs| doc_path.starts_with(docs))
-        .unwrap_or(requested_root);
     Ok((doc_path, root_dir))
 }
 
-fn find_readme(dir: &Path) -> Option<PathBuf> {
+fn find_readme(root_dir: &Path, dir: &Path) -> Option<PathBuf> {
     for name in README_NAMES {
         let candidate = dir.join(name);
         if candidate.is_file() {
-            return fs::canonicalize(candidate).ok();
+            if let Ok(canonical) = fs::canonicalize(candidate) {
+                if canonical.starts_with(root_dir) {
+                    return Some(canonical);
+                }
+            }
         }
     }
     None
 }
 
-fn find_start_doc(dir: &Path) -> Option<PathBuf> {
-    if let Some(readme) = find_readme(dir) {
+fn find_start_doc(root_dir: &Path, dir: &Path) -> Option<PathBuf> {
+    if let Some(readme) = find_readme(root_dir, dir) {
         return Some(readme);
     }
     let mut files: Vec<PathBuf> = fs::read_dir(dir)
@@ -619,6 +654,7 @@ fn find_start_doc(dir: &Path) -> Option<PathBuf> {
         .find(|p| is_markdown_path(p))
         .or_else(|| files.iter().find(|p| is_image_path(p)))
         .and_then(|p| fs::canonicalize(p).ok())
+        .filter(|p| p.starts_with(root_dir))
 }
 
 fn resolve_within_root(root_dir: &Path, url_path: &str) -> Option<PathBuf> {
@@ -701,10 +737,10 @@ fn mime_for(path: &Path) -> &'static str {
         "avif" => "image/avif",
         "css" => "text/css; charset=utf-8",
         "gif" => "image/gif",
-        "htm" | "html" => "text/html; charset=utf-8",
+        // Never serve raw HTML or JavaScript from a previewed folder with executable MIME types.
+        "htm" | "html" | "js" | "mjs" | "txt" => "text/plain; charset=utf-8",
         "ico" => "image/x-icon",
         "jpeg" | "jpg" => "image/jpeg",
-        "js" | "mjs" => "text/javascript; charset=utf-8",
         "json" => "application/json; charset=utf-8",
         "mp3" => "audio/mpeg",
         "mp4" => "video/mp4",
@@ -712,7 +748,6 @@ fn mime_for(path: &Path) -> &'static str {
         "png" => "image/png",
         "svg" => "image/svg+xml",
         "ttf" => "font/ttf",
-        "txt" => "text/plain; charset=utf-8",
         "wav" => "audio/wav",
         "webm" => "video/webm",
         "webp" => "image/webp",
@@ -722,12 +757,27 @@ fn mime_for(path: &Path) -> &'static str {
     }
 }
 
+fn random_nonce() -> String {
+    random_bytes(16)
+        .unwrap_or_else(|_| {
+            let mut fallback = [0u8; 16];
+            let nanos = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map_or(0u128, |d| d.as_nanos());
+            fallback.copy_from_slice(&nanos.to_le_bytes());
+            fallback.to_vec()
+        })
+        .iter()
+        .map(|b| format!("{b:02x}"))
+        .collect()
+}
+
 fn constant_time_eq(a: &[u8], b: &[u8]) -> bool {
     a.len() == b.len() && a.iter().zip(b.iter()).fold(0u8, |acc, (x, y)| acc | (x ^ y)) == 0
 }
 
-fn random_token() -> Result<String, String> {
-    let mut bytes = [0u8; 24];
+fn random_bytes(len: usize) -> Result<Vec<u8>, String> {
+    let mut bytes = vec![0u8; len];
     #[cfg(unix)]
     {
         File::open("/dev/urandom")
@@ -740,9 +790,13 @@ fn random_token() -> Result<String, String> {
         let mut h = Sha256::new();
         h.update(format!("{:?}-{:?}", Instant::now(), std::process::id()).as_bytes());
         let digest = h.finalize();
-        bytes.copy_from_slice(&digest[..24]);
+        bytes.copy_from_slice(&digest[..len]);
     }
-    Ok(bytes.iter().map(|b| format!("{b:02x}")).collect())
+    Ok(bytes)
+}
+
+fn random_token() -> Result<String, String> {
+    Ok(random_bytes(24)?.iter().map(|b| format!("{b:02x}")).collect())
 }
 
 #[cfg(test)]
@@ -894,5 +948,55 @@ mod tests {
         assert_eq!(p1.url, p2.url);
         assert!(open(&dir.join("missing.md").to_string_lossy()).is_err());
         let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn blocks_readme_symlink_escape_and_sets_csp_and_safe_asset_mimes() {
+        let root = std::env::temp_dir().join(format!("herdr-md-sec-{}", std::process::id()));
+        let outside = std::env::temp_dir().join(format!("herdr-md-sec-out-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&root);
+        let _ = fs::remove_dir_all(&outside);
+        fs::create_dir_all(root.join("sub")).unwrap();
+        fs::create_dir_all(&outside).unwrap();
+        fs::write(root.join("doc.md"), "# Doc\n").unwrap();
+        fs::write(root.join("evil.html"), "<script>alert(1)</script>").unwrap();
+        fs::write(root.join("evil.js"), "alert(1)").unwrap();
+        fs::write(outside.join("secret.txt"), "top-secret-key").unwrap();
+        #[cfg(unix)]
+        std::os::unix::fs::symlink(outside.join("secret.txt"), root.join("sub/README.md")).unwrap();
+
+        let preview = open(&root.join("doc.md").to_string_lossy()).unwrap();
+        let parsed = url::Url::parse(&preview.url).unwrap();
+        let port = parsed.port().unwrap();
+        let token = parsed.path().trim_start_matches('/').split('/').next().unwrap().to_string();
+
+        // Viewer HTML ships strict nonce-based CSP and no external connect-src
+        let (status, head, body) = http_get(port, parsed.path(), &[("Accept", "text/html")]);
+        assert_eq!(status, 200);
+        assert!(head.contains("Content-Security-Policy:"));
+        assert!(head.contains("connect-src 'self'"));
+        assert!(head.contains("frame-src 'none'"));
+        assert!(!body.contains("{{NONCE}}"));
+
+        // Subdirectory README.md symlink pointing outside root must never be served
+        #[cfg(unix)]
+        {
+            let (status, _, body) = http_get(port, &format!("/{token}/sub"), &[]);
+            assert_eq!(status, 404);
+            assert!(!body.contains("top-secret-key"));
+        }
+
+        // Raw .html and .js files are neutered to text/plain + sandbox CSP
+        let (status, head, _) = http_get(port, &format!("/{token}/evil.html"), &[]);
+        assert_eq!(status, 200);
+        assert!(head.contains("Content-Type: text/plain"));
+        assert!(head.contains("Content-Security-Policy: default-src 'none'; style-src 'unsafe-inline'; sandbox"));
+
+        let (status, head, _) = http_get(port, &format!("/{token}/evil.js"), &[]);
+        assert_eq!(status, 200);
+        assert!(head.contains("Content-Type: text/plain"));
+
+        let _ = fs::remove_dir_all(&root);
+        let _ = fs::remove_dir_all(&outside);
     }
 }

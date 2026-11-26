@@ -42,6 +42,15 @@ fn web_url(url: &str) -> bool {
     url == "about:blank"
         || url::Url::parse(url).is_ok_and(|u| matches!(u.scheme(), "http" | "https"))
 }
+fn subframe_url(url: &str) -> bool {
+    if web_url(url) || url == "about:srcdoc" {
+        return true;
+    }
+    if let Some(inner) = url.strip_prefix("blob:") {
+        return url::Url::parse(inner).is_ok_and(|u| matches!(u.scheme(), "http" | "https"));
+    }
+    url::Url::parse(url).is_ok_and(|u| matches!(u.scheme(), "data" | "javascript"))
+}
 fn download_url(url: &str) -> bool {
     if let Some(inner) = url.strip_prefix("blob:") {
         return url::Url::parse(inner).is_ok_and(|u| matches!(u.scheme(), "http" | "https"));
@@ -78,7 +87,7 @@ wrap_load_handler! {
 wrap_request_handler! {
     struct Navigation { tx: Option<Tx> }
     impl RequestHandler {
-        fn auth_credentials(&self, _browser: Option<&mut Browser>, _origin: Option<&CefString>, _proxy: i32, host: Option<&CefString>, _port: i32, _realm: Option<&CefString>, _scheme: Option<&CefString>, callback: Option<&mut AuthCallback>) -> i32 {
+        fn auth_credentials(&self, _browser: Option<&mut Browser>, origin: Option<&CefString>, proxy: i32, host: Option<&CefString>, port: i32, realm: Option<&CefString>, _scheme: Option<&CefString>, callback: Option<&mut AuthCallback>) -> i32 {
             // The pane asks for the sign-in itself: Chromium's own prompt
             // crashes the app when its pane closes first. A popup has no pane
             // to ask in, so its challenge is declined.
@@ -88,13 +97,25 @@ wrap_request_handler! {
                 Some((user, password)) => callback.cont(Some(&user.as_str().into()), Some(&password.as_str().into())),
                 None => callback.cancel(),
             });
+            let origin = origin.map(CefString::to_string).unwrap_or_default();
             let host = host.map(CefString::to_string).unwrap_or_default();
-            let _ = tx.try_send(Event::Auth(super::Auth { host, reply: Some(reply) }));
+            let realm = realm.map(CefString::to_string).unwrap_or_default();
+            let _ = tx.try_send(Event::Auth(super::Auth {
+                origin,
+                host,
+                port,
+                is_proxy: proxy != 0,
+                realm,
+                reply: Some(reply),
+            }));
             1
         }
         fn on_before_browse(&self, _browser: Option<&mut Browser>, frame: Option<&mut Frame>, request: Option<&mut Request>, _gesture: i32, _redirect: i32) -> i32 {
-            if !frame.is_some_and(|f| f.is_main() != 0) { return 0; }
-            request.is_some_and(|r| !web_url(&CefString::from(&r.url()).to_string())) as i32
+            let Some(url) = request.map(|r| CefString::from(&r.url()).to_string()) else { return 0 };
+            if frame.is_some_and(|f| f.is_main() != 0) {
+                return (!web_url(&url)) as i32;
+            }
+            (!subframe_url(&url)) as i32
         }
         // Cmd-click and middle-click ask for a new tab here, not as a popup;
         // left alone, Chromium has no tab strip to put it in and drops it.
@@ -120,7 +141,7 @@ fn closed_itself(cell: &std::rc::Weak<RefCell<Option<Browser>>>, tx: &Tx, browse
     }
 }
 wrap_life_span_handler! {
-    struct Life { tx: Tx, browser: std::rc::Weak<RefCell<Option<Browser>>>, closing: Rc<Cell<bool>>, pending: Rc<Cell<bool>> }
+    struct Life { tx: Tx, ask: bool, browser: std::rc::Weak<RefCell<Option<Browser>>>, closing: Rc<Cell<bool>>, pending: Rc<Cell<bool>> }
     impl LifeSpanHandler {
         fn on_after_created(&self, browser: Option<&mut Browser>) {
             let primary = self.pending.replace(false);
@@ -152,7 +173,7 @@ wrap_life_span_handler! {
             // that keeps window.opener; cancelling it makes the page report
             // "popups blocked". Links that ask for a new tab become Herdr tabs.
             if disposition == WindowOpenDisposition::NEW_POPUP && (url.is_empty() || web_url(&url)) {
-                if let Some(client) = client { *client = Some(PopupClient::new()); }
+                if let Some(client) = client { *client = Some(PopupClient::new(self.ask)); }
                 return 0;
             }
             if web_url(&url) { let _ = self.tx.try_send(Event::Open(url)); }
@@ -179,10 +200,11 @@ wrap_life_span_handler! {
     }
 }
 wrap_client! {
-    struct PopupClient;
+    struct PopupClient { ask: bool }
     impl Client {
         fn request_handler(&self) -> Option<RequestHandler> { Some(Navigation::new(None)) }
         fn life_span_handler(&self) -> Option<LifeSpanHandler> { Some(PopupLife::new()) }
+        fn download_handler(&self) -> Option<DownloadHandler> { Some(Download::new(None, self.ask)) }
     }
 }
 wrap_focus_handler! {
@@ -215,30 +237,69 @@ wrap_keyboard_handler! {
         }
     }
 }
+const MAX_AGENT_DOWNLOAD_BYTES: i64 = 512 * 1024 * 1024;
+
 wrap_download_handler! {
     // A person sees Chromium's save dialog; agent downloads save to the app home.
-    struct Download { tx: Tx, ask: bool }
+    struct Download { tx: Option<Tx>, ask: bool }
     impl DownloadHandler {
         fn can_download(&self, _browser: Option<&mut Browser>, url: Option<&CefString>, _method: Option<&CefString>) -> i32 {
             url.is_some_and(|url| download_url(&url.to_string())) as i32
         }
-        fn on_before_download(&self, _browser: Option<&mut Browser>, _item: Option<&mut DownloadItem>, name: Option<&CefString>, callback: Option<&mut BeforeDownloadCallback>) -> i32 {
+        fn on_before_download(&self, _browser: Option<&mut Browser>, item: Option<&mut DownloadItem>, name: Option<&CefString>, callback: Option<&mut BeforeDownloadCallback>) -> i32 {
+            if !self.ask && item.as_ref().is_some_and(|i| i.total_bytes() > MAX_AGENT_DOWNLOAD_BYTES) {
+                if let Some(tx) = &self.tx {
+                    let _ = tx.try_send(Event::Notice("Refused unattended download over 512 MiB".into()));
+                }
+                return 1;
+            }
             let folder = crate::mods::app_dir().join("downloads");
-            if std::fs::create_dir_all(&folder).is_err() { let _ = self.tx.try_send(Event::Notice("Cannot create downloads folder".into())); return 1; }
+            if std::fs::create_dir_all(&folder).is_err() {
+                if let Some(tx) = &self.tx {
+                    let _ = tx.try_send(Event::Notice("Cannot create downloads folder".into()));
+                }
+                return 1;
+            }
+            {
+                use std::os::unix::fs::PermissionsExt;
+                let _ = std::fs::set_permissions(&folder, std::fs::Permissions::from_mode(0o700));
+            }
             let suggested = name.map(CefString::to_string).unwrap_or_else(|| "download".into());
-            let name = std::path::Path::new(&suggested).file_name().unwrap_or_default();
-            let mut path = folder.join(name); let mut i = 1;
-            while path.exists() { path = folder.join(format!("{i}-{}", name.to_string_lossy())); i += 1; }
+            let clean = std::path::Path::new(&suggested)
+                .file_name()
+                .and_then(|n| n.to_str())
+                .map(|n| n.trim_matches('.'))
+                .filter(|n| !n.is_empty())
+                .unwrap_or("download");
+            let mut path = folder.join(clean);
+            let mut i = 1;
+            while path.symlink_metadata().is_ok() {
+                path = folder.join(format!("{i}-{clean}"));
+                i += 1;
+            }
             if let Some(callback) = callback {
                 callback.cont(Some(&CefString::from(path.to_string_lossy().as_ref())), self.ask as i32);
-                let _ = self.tx.try_send(Event::Notice(format!("Downloading to {}", path.display())));
+                if let Some(tx) = &self.tx {
+                    let _ = tx.try_send(Event::Notice(format!("Downloading to {}", path.display())));
+                }
             }
             1
         }
-        fn on_download_updated(&self, _browser: Option<&mut Browser>, item: Option<&mut DownloadItem>, _callback: Option<&mut DownloadItemCallback>) {
+        fn on_download_updated(&self, _browser: Option<&mut Browser>, item: Option<&mut DownloadItem>, callback: Option<&mut DownloadItemCallback>) {
             if let Some(item) = item {
-                if item.is_complete() != 0 { let _ = self.tx.try_send(Event::Notice(format!("Download saved to {}", CefString::from(&item.full_path())))); }
-                else if item.is_canceled() != 0 { let _ = self.tx.try_send(Event::Notice("Download canceled".into())); }
+                if !self.ask && item.received_bytes() > MAX_AGENT_DOWNLOAD_BYTES {
+                    if let Some(callback) = callback {
+                        callback.cancel();
+                    }
+                    if let Some(tx) = &self.tx {
+                        let _ = tx.try_send(Event::Notice("Canceled unattended download over 512 MiB".into()));
+                    }
+                    return;
+                }
+                if let Some(tx) = &self.tx {
+                    if item.is_complete() != 0 { let _ = tx.try_send(Event::Notice(format!("Download saved to {}", CefString::from(&item.full_path())))); }
+                    else if item.is_canceled() != 0 { let _ = tx.try_send(Event::Notice("Download canceled".into())); }
+                }
             }
         }
     }
@@ -269,10 +330,10 @@ wrap_client! {
         fn display_handler(&self) -> Option<DisplayHandler> { Some(Display::new(self.tx.clone())) }
         fn load_handler(&self) -> Option<LoadHandler> { Some(Load::new(self.tx.clone())) }
         fn request_handler(&self) -> Option<RequestHandler> { Some(Navigation::new(Some(self.tx.clone()))) }
-        fn life_span_handler(&self) -> Option<LifeSpanHandler> { Some(Life::new(self.tx.clone(), self.browser.clone(), self.closing.clone(), self.pending.clone())) }
+        fn life_span_handler(&self) -> Option<LifeSpanHandler> { Some(Life::new(self.tx.clone(), self.ask, self.browser.clone(), self.closing.clone(), self.pending.clone())) }
         fn focus_handler(&self) -> Option<FocusHandler> { Some(Focus::new(self.gate.clone())) }
         fn keyboard_handler(&self) -> Option<KeyboardHandler> { Some(Keys::new()) }
-        fn download_handler(&self) -> Option<DownloadHandler> { Some(Download::new(self.tx.clone(), self.ask)) }
+        fn download_handler(&self) -> Option<DownloadHandler> { Some(Download::new(Some(self.tx.clone()), self.ask)) }
         fn find_handler(&self) -> Option<FindHandler> { Some(Find::new(self.tx.clone())) }
     }
 }
@@ -1101,8 +1162,20 @@ mod tests {
     use super::{
         CursorPrefs, DEFAULT_AGENT_CURSOR_IDLE_SECS, MAX_AGENT_CURSOR_IDLE_SECS,
         agent_ripple_svg, ctrl_cmd_shortcut, ctrl_shortcut, download_url, parse_cursor_prefs,
-        shortcut,
+        shortcut, subframe_url,
     };
+    #[test]
+    fn subframe_url_blocks_external_protocols() {
+        assert!(subframe_url("https://example.com/embed"));
+        assert!(subframe_url("about:blank"));
+        assert!(subframe_url("about:srcdoc"));
+        assert!(subframe_url("blob:https://example.com/1234"));
+        assert!(subframe_url("data:text/html,hi"));
+        assert!(!subframe_url("file:///etc/passwd"));
+        assert!(!subframe_url("ssh://evil.example"));
+        assert!(!subframe_url("vscode://file/etc/passwd"));
+        assert!(!subframe_url("blob:file:///etc/passwd"));
+    }
     #[test]
     fn cursor_prefs_parses_style_and_idle_timeout() {
         assert_eq!(

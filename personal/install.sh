@@ -84,9 +84,16 @@ tar -xzf "$tmp/$archive_name" -C "$tmp"
 
 if signature=$(/usr/bin/codesign -dvv "$tmp/Herdr Browser.app" 2>&1); then
   if printf '%s\n' "$signature" | grep -q '^Authority=Developer ID Application:'; then
+    if [ -n "${HERDR_BROWSER_TEAM_ID:-}" ]; then
+      printf '%s\n' "$signature" | grep -qx "TeamIdentifier=$HERDR_BROWSER_TEAM_ID" ||
+        fail "app signature TeamIdentifier does not match HERDR_BROWSER_TEAM_ID ($HERDR_BROWSER_TEAM_ID)"
+    fi
     /usr/bin/codesign --verify --deep --strict "$tmp/Herdr Browser.app" || fail "invalid Developer ID signature"
   elif printf '%s\n' "$signature" | grep -qx 'Signature=adhoc'; then
-    say "Warning: this build is ad-hoc signed (not notarized); macOS may ask you to allow it in Privacy & Security."
+    if [ "${HERDR_BROWSER_ALLOW_ADHOC:-0}" != 1 ]; then
+      fail "refusing ad-hoc signed build (set HERDR_BROWSER_ALLOW_ADHOC=1 to allow an unsigned/ad-hoc build)"
+    fi
+    say "Warning: installing ad-hoc signed build (HERDR_BROWSER_ALLOW_ADHOC=1); macOS may ask you to allow it in Privacy & Security."
   else
     /usr/bin/codesign --verify --deep --strict "$tmp/Herdr Browser.app" || fail "invalid app signature"
   fi

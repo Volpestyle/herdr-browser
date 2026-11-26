@@ -29,12 +29,53 @@ fn now() -> f64 {
         .map_or(0., |d| d.as_secs_f64())
 }
 
+const MAX_RECORDING_FRAMES: usize = 18_000;
+
+fn mkdir_private(dir: &std::path::Path) -> Result<(), String> {
+    std::fs::create_dir_all(dir).map_err(|e| e.to_string())?;
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let _ = std::fs::set_permissions(dir, std::fs::Permissions::from_mode(0o700));
+    }
+    Ok(())
+}
+
+#[cfg(target_os = "macos")]
+fn apply_quarantine(path: &std::path::Path) {
+    use std::ffi::CString;
+    use std::os::unix::ffi::OsStrExt;
+    let Ok(c_path) = CString::new(path.as_os_str().as_bytes()) else { return };
+    let Ok(c_name) = CString::new("com.apple.quarantine") else { return };
+    let secs = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_or(0, |d| d.as_secs());
+    let value = format!("0081;{secs:08x};Herdr Browser;");
+    unsafe {
+        libc::setxattr(
+            c_path.as_ptr(),
+            c_name.as_ptr(),
+            value.as_ptr().cast(),
+            value.len(),
+            0,
+            0,
+        );
+    }
+}
+
+fn ffconcat_quote(path: &std::path::Path) -> String {
+    path.display().to_string().replace('\'', "'\\''")
+}
+
 fn save_frame(recording: &mut Recording, params: &[u8], browser: Option<&mut Browser>) {
     let Ok(frame) = serde_json::from_slice::<Value>(params) else { return };
     if let Some(host) = browser.and_then(|b| b.host()) {
         let id = NEXT_ACK.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
         let ack = json!({"id":id,"method":"Page.screencastFrameAck","params":{"sessionId":frame["sessionId"]}});
         host.send_dev_tools_message(Some(&serde_json::to_vec(&ack).unwrap_or_default()));
+    }
+    if recording.frames.len() >= MAX_RECORDING_FRAMES {
+        return;
     }
     let (Some(data), Some(ts)) = (frame["data"].as_str(), frame["metadata"]["timestamp"].as_f64()) else { return };
     let Ok(bytes) = base64::engine::general_purpose::STANDARD.decode(data) else { return };
@@ -54,11 +95,11 @@ fn encode(recording: Recording, end: f64) -> Result<std::path::PathBuf, String> 
     for (i, (file, _)) in recording.frames.iter().enumerate() {
         let from = if i == 0 { 0. } else { at[i] };
         let to = at.get(i + 1).copied().unwrap_or(end - recording.t0);
-        list.push(format!("file '{}'", file.display()));
+        list.push(format!("file '{}'", ffconcat_quote(file)));
         list.push(format!("duration {:.4}", (to - from).max(0.001)));
     }
     let last = recording.frames.last().ok_or("No frames were captured")?;
-    list.push(format!("file '{}'", last.0.display()));
+    list.push(format!("file '{}'", ffconcat_quote(&last.0)));
     let concat = recording.dir.join("frames.txt");
     std::fs::write(&concat, list.join("\n")).map_err(|e| e.to_string())?;
     let video = recording.dir.join("raw.mp4");
@@ -558,8 +599,8 @@ impl Control {
         let caller = self.caller.borrow().clone();
         if self.recording.borrow().is_some() {
             let svg = String::from_utf8_lossy(&(self.cursor)(caller.as_deref())).into_owned();
-            let expression = format!("window.__herdrRecordAs?.({}, {})", json!(caller.as_deref().unwrap_or_default()), json!(svg));
-            self.call("Runtime.evaluate", json!({"expression":expression}), ex).await?;
+            let expression = format!("globalThis.__herdrRecordAs?.({}, {})", json!(caller.as_deref().unwrap_or_default()), json!(svg));
+            let _ = self.evaluate(&expression, ex).await;
         }
         if (self.pointer)(caller.as_deref(), x, y, PointerAction::Click) {
             ex.timer(Duration::from_millis(350)).await;
@@ -588,8 +629,8 @@ impl Control {
         let caller = self.caller.borrow().clone();
         if self.recording.borrow().is_some() {
             let svg = String::from_utf8_lossy(&(self.cursor)(caller.as_deref())).into_owned();
-            let expression = format!("window.__herdrRecordAs?.({}, {})", json!(caller.as_deref().unwrap_or_default()), json!(svg));
-            let _ = self.call("Runtime.evaluate", json!({"expression":expression}), ex).await;
+            let expression = format!("globalThis.__herdrRecordAs?.({}, {})", json!(caller.as_deref().unwrap_or_default()), json!(svg));
+            let _ = self.evaluate(&expression, ex).await;
         }
         (self.pointer)(caller.as_deref(), x, y, PointerAction::Scroll);
         // Unasked, a page Chromium is not rendering gets the script: a wheel would stall there.
@@ -659,18 +700,20 @@ impl Control {
         let number = |i: usize| size[i].as_f64().filter(|n| *n > 0.).ok_or("Page has no viewport");
         let size = (number(0)?, number(1)?, number(2)?);
         let t0 = now();
-        let dir = crate::mods::app_dir().join("recordings").join(format!("{}", (t0 * 1000.) as u64));
-        std::fs::create_dir_all(dir.join("frames")).map_err(|e| e.to_string())?;
+        let recordings_root = crate::mods::app_dir().join("recordings");
+        mkdir_private(&recordings_root)?;
+        let dir = recordings_root.join(format!("{}", (t0 * 1000.) as u64));
+        mkdir_private(&dir.join("frames"))?;
         let source = RECORD_CURSOR
             .replace("__SVG__", &serde_json::to_string(&String::from_utf8_lossy(&(self.cursor)(None))).unwrap_or_default())
             .replace("__IDLE_MS__", &(self.idle_ms)().to_string());
         self.call("Page.enable", json!({}), ex).await?;
         let script = self
-            .call("Page.addScriptToEvaluateOnNewDocument", json!({"source":source}), ex)
+            .call("Page.addScriptToEvaluateOnNewDocument", json!({"source":source,"worldName":"herdr-agent-control"}), ex)
             .await?["identifier"]
             .as_str()
             .map(str::to_string);
-        self.call("Runtime.evaluate", json!({"expression":source}), ex).await?;
+        self.evaluate(&source, ex).await?;
         *self.recording.borrow_mut() = Some(Recording { dir: dir.clone(), t0, size, script, frames: Vec::new() });
         let started = self
             .call("Page.startScreencast", json!({"format":"jpeg","quality":90,"maxWidth":(size.0 * size.2) as i64,"maxHeight":(size.1 * size.2) as i64,"everyNthFrame":1}), ex)
@@ -689,7 +732,7 @@ impl Control {
         if let Some(id) = &recording.script {
             let _ = self.call("Page.removeScriptToEvaluateOnNewDocument", json!({"identifier":id}), ex).await;
         }
-        let _ = self.call("Runtime.evaluate", json!({"expression":"window.__herdrRecordStop?.()"}), ex).await;
+        let _ = self.evaluate("globalThis.__herdrRecordStop?.()", ex).await;
         let dir = recording.dir.clone();
         let frames = recording.frames.len();
         if frames == 0 {
@@ -772,16 +815,17 @@ impl Control {
         Ok(())
     }
 
-    async fn page_host(&self, ex: &BackgroundExecutor) -> Result<String, String> {
+    async fn page_url(&self, ex: &BackgroundExecutor) -> Result<url::Url, String> {
         let page = self.version(ex).await?;
         let url = url::Url::parse(page["page"]["url"].as_str().unwrap_or(""))
             .map_err(|_| "Sign-in needs a web page")?;
         if !matches!(url.scheme(), "https" | "http") {
             return Err("Sign-in needs an http(s) page".into());
         }
-        url.host_str()
-            .map(str::to_ascii_lowercase)
-            .ok_or("Sign-in needs a page with a host".into())
+        if url.host_str().is_none() {
+            return Err("Sign-in needs a page with a host".into());
+        }
+        Ok(url)
     }
 
     async fn login_field(&self, password: bool, ex: &BackgroundExecutor) -> Result<Option<i64>, String> {
@@ -809,14 +853,15 @@ impl Control {
         Ok(node?["node"]["backendNodeId"].as_i64())
     }
 
-    /// Checks the site again right before each value, so a redirect never receives it.
-    async fn fill(&self, node: i64, sites: &[String], value: &str, ex: &BackgroundExecutor) -> Result<(), String> {
-        let host = self.page_host(ex).await?;
-        if !listed(sites, &host) {
-            return Err(format!("The 1Password item does not list {host}; refusing to fill"));
+    /// Checks the site both before clicking and again immediately before Input.insertText,
+    /// so a redirect or focus hijack during the click animation never receives credentials.
+    async fn fill(&self, node: i64, sites: &[SiteRule], value: &str, ex: &BackgroundExecutor) -> Result<(), String> {
+        let before = self.page_url(ex).await?;
+        if !listed_url(sites, &before) {
+            return Err(format!("The credentials do not allow {}; refusing to fill", before.origin().ascii_serialization()));
         }
         if value.is_empty() {
-            return Err("The 1Password item has an empty value for this field".into());
+            return Err("The credentials have an empty value for this field".into());
         }
         self.click(node, ex).await?;
         let target = self
@@ -829,10 +874,23 @@ impl Control {
         let object = target["object"]["objectId"]
             .as_str()
             .ok_or("Login field disappeared")?;
-        self.call("Runtime.callFunctionOn", json!({"objectId":object,"functionDeclaration":"function() { this.focus(); this.select?.(); }"}), ex)
+        let focused = self.call("Runtime.callFunctionOn", json!({"objectId":object,"functionDeclaration":r#"function() {
+            this.focus();
+            this.select?.();
+            let e = document.activeElement;
+            while (e?.shadowRoot?.activeElement) e = e.shadowRoot.activeElement;
+            return this === e && !this.disabled && !this.readOnly;
+        }"#,"returnByValue":true}), ex)
             .await?;
         self.call("Runtime.releaseObject", json!({"objectId":object}), ex)
             .await?;
+        if focused["result"]["value"] != true {
+            return Err("Login field lost focus before credentials could be filled".into());
+        }
+        let after = self.page_url(ex).await?;
+        if !listed_url(sites, &after) {
+            return Err(format!("Page changed to {} before filling; refusing to fill", after.origin().ascii_serialization()));
+        }
         self.call("Input.insertText", json!({"text":value}), ex).await?;
         Ok(())
     }
@@ -1113,7 +1171,7 @@ impl Control {
                 let kind = got["type"].as_str().unwrap_or("");
                 let name = download_name(got["url"].as_str().unwrap_or(url), kind);
                 let dir = crate::mods::app_dir().join("downloads");
-                std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
+                mkdir_private(&dir)?;
                 use std::io::Write;
                 let open = |path: &std::path::Path| {
                     std::fs::OpenOptions::new().write(true).create_new(true).open(path)
@@ -1136,6 +1194,8 @@ impl Control {
                     Err(e) => return Err(e.to_string()),
                 };
                 file.write_all(&bytes).map_err(|e| e.to_string())?;
+                #[cfg(target_os = "macos")]
+                apply_quarantine(&path);
                 Ok(json!({"path":path,"bytes":bytes.len(),"content_type":kind,"status":status,"url":got["url"]}))
             }
             "browser.read" => {
@@ -1187,11 +1247,11 @@ impl Control {
                 Ok(json!({"ok":true}))
             }
             "browser.signin" => {
-                self.page_host(ex).await?;
+                self.page_url(ex).await?;
                 let login = login(args, ex).await?;
                 let mut filled = Vec::new();
                 if let Some(field) = self.login_field(false, ex).await? {
-                    self.fill(field, &login.urls, &login.username, ex).await?;
+                    self.fill(field, &login.sites, &login.username, ex).await?;
                     filled.push("username");
                 }
                 let mut password = self.login_field(true, ex).await?;
@@ -1205,7 +1265,7 @@ impl Control {
                 }
                 match password {
                     Some(field) => {
-                        self.fill(field, &login.urls, &login.password, ex).await?;
+                        self.fill(field, &login.sites, &login.password, ex).await?;
                         filled.push("password");
                         self.send_key("Enter", ex).await?;
                     }
@@ -1355,7 +1415,7 @@ impl Control {
                     .decode(encoded)
                     .map_err(|e| e.to_string())?;
                 let dir = crate::mods::app_dir().join("screenshots");
-                std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
+                mkdir_private(&dir)?;
                 let path = dir.join(format!(
                     "browser-{}-{}.{}",
                     std::process::id(),
@@ -1492,7 +1552,7 @@ fn download_name(url: &str, content_type: &str) -> String {
 const FULL_HEIGHT: f64 = 20000.;
 
 const RECORD_CURSOR: &str = r#"(() => {
-  if (window.__herdrRecordStop) return;
+  if (globalThis.__herdrRecordStop) return;
   const cursors = new Map();
   let current = '', svg = __SVG__;
   const idleMs = __IDLE_MS__;
@@ -1534,24 +1594,102 @@ const RECORD_CURSOR: &str = r#"(() => {
   };
   addEventListener('pointermove', to, true);
   addEventListener('pointerdown', ripple, true);
-  window.__herdrRecordAs = (key, next) => { current = key; svg = next; };
-  window.__herdrRecordStop = () => {
+  globalThis.__herdrRecordAs = (key, next) => { current = key; svg = next; };
+  globalThis.__herdrRecordStop = () => {
     removeEventListener('pointermove', to, true);
     removeEventListener('pointerdown', ripple, true);
     for (const c of cursors.values()) c.el.remove();
-    delete window.__herdrRecordAs;
-    delete window.__herdrRecordStop;
+    delete globalThis.__herdrRecordAs;
+    delete globalThis.__herdrRecordStop;
   };
 })()"#;
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(super) struct SiteRule {
+    pub(super) host: String,
+    pub(super) scheme: Option<String>,
+    pub(super) port: Option<u16>,
+}
 
 pub(super) struct Login {
     pub(super) username: String,
     pub(super) password: String,
-    pub(super) urls: Vec<String>,
+    pub(super) sites: Vec<SiteRule>,
 }
 
-pub(super) fn listed(sites: &[String], host: &str) -> bool {
-    sites.iter().any(|site| host == *site || host.ends_with(&format!(".{site}")))
+const MULTI_TENANT_HOSTS: &[&str] = &[
+    "github.io",
+    "gitlab.io",
+    "vercel.app",
+    "netlify.app",
+    "herokuapp.com",
+    "appspot.com",
+    "pages.dev",
+    "workers.dev",
+    "fly.dev",
+    "onrender.com",
+    "web.app",
+    "firebaseapp.com",
+    "s3.amazonaws.com",
+    "cloudfront.net",
+    "azurewebsites.net",
+    "notion.site",
+];
+
+fn is_loopback_host(host: &str) -> bool {
+    matches!(host, "localhost" | "127.0.0.1" | "::1" | "[::1]")
+}
+
+pub(super) fn parse_site_rule(raw: &str) -> Option<SiteRule> {
+    let trimmed = raw.trim();
+    if trimmed.is_empty() {
+        return None;
+    }
+    let has_scheme = trimmed.contains("://");
+    let candidate = if has_scheme {
+        trimmed.to_string()
+    } else {
+        format!("https://{trimmed}")
+    };
+    let parsed = url::Url::parse(&candidate).ok()?;
+    if !matches!(parsed.scheme(), "http" | "https") {
+        return None;
+    }
+    let host = parsed.host_str()?.trim_end_matches('.').to_ascii_lowercase();
+    if host.is_empty() {
+        return None;
+    }
+    Some(SiteRule {
+        host,
+        scheme: has_scheme.then(|| parsed.scheme().to_string()),
+        port: parsed.port(),
+    })
+}
+
+pub(super) fn listed_url(sites: &[SiteRule], target: &url::Url) -> bool {
+    if !matches!(target.scheme(), "http" | "https") {
+        return false;
+    }
+    let Some(raw_host) = target.host_str() else {
+        return false;
+    };
+    let host = raw_host.trim_end_matches('.').to_ascii_lowercase();
+    let loopback = is_loopback_host(&host);
+    sites.iter().any(|rule| {
+        if target.scheme() == "http" && !loopback && rule.scheme.as_deref() != Some("http") {
+            return false;
+        }
+        if rule.port.is_some() && rule.port != target.port() {
+            return false;
+        }
+        if host == rule.host {
+            return true;
+        }
+        if !rule.host.contains('.') || MULTI_TENANT_HOSTS.contains(&rule.host.as_str()) {
+            return false;
+        }
+        host.ends_with(&format!(".{}", rule.host))
+    })
 }
 
 /// browser.signin's credentials: a 1Password item, or a dotenv file's test login.
@@ -1596,24 +1734,22 @@ fn one_password(item: &str) -> Result<Login, String> {
             .unwrap_or("")
             .to_string()
     };
-    let urls: Vec<String> = v["urls"]
+    let sites: Vec<SiteRule> = v["urls"]
         .as_array()
         .into_iter()
         .flatten()
         .filter_map(|u| u["href"].as_str())
-        .filter_map(|href| {
-            let href = if href.contains("://") { href.to_string() } else { format!("https://{href}") };
-            url::Url::parse(&href).ok()?.host_str().map(str::to_ascii_lowercase)
-        })
+        .filter_map(parse_site_rule)
         .collect();
-    if urls.is_empty() {
+    if sites.is_empty() {
         return Err(format!("1Password item {item:?} lists no website; add one so sign-in knows where it may fill"));
     }
-    Ok(Login { username: field("USERNAME"), password: field("PASSWORD"), urls })
+    Ok(Login { username: field("USERNAME"), password: field("PASSWORD"), sites })
 }
 
 /// Test credentials from a dotenv file; `site` stands in for a 1Password item's websites.
 fn env_login(file: &str, user_key: &str, password_key: &str, site: &str) -> Result<Login, String> {
+    let rule = parse_site_rule(site).ok_or_else(|| format!("Invalid site {site:?}"))?;
     let body = std::fs::read_to_string(file).map_err(|e| format!("Cannot read {file}: {e}"))?;
     let value = |key: &str| {
         body.lines()
@@ -1625,13 +1761,13 @@ fn env_login(file: &str, user_key: &str, password_key: &str, site: &str) -> Resu
     Ok(Login {
         username: value(user_key)?,
         password: value(password_key)?,
-        urls: vec![site.trim().to_ascii_lowercase()],
+        sites: vec![rule],
     })
 }
 
 #[cfg(test)]
 mod tests {
-    use super::download_name;
+    use super::{download_name, listed_url, parse_site_rule};
 
     #[test]
     fn download_names_keep_the_site_name_and_stay_inside_the_folder() {
@@ -1642,5 +1778,28 @@ mod tests {
         assert_eq!(download_name("data:image/png;base64,iVBOR", "image/png"), "download.png");
         assert_eq!(download_name("blob:https://example.com/1f2e", ""), "download");
         assert_eq!(download_name("/relative/thing.zip", ""), "download");
+    }
+
+    #[test]
+    fn signin_site_matching_blocks_http_downgrade_port_mismatch_and_multitenant_wildcards() {
+        let https_site = vec![parse_site_rule("https://example.com").unwrap()];
+        assert!(listed_url(&https_site, &url::Url::parse("https://example.com/login").unwrap()));
+        assert!(listed_url(&https_site, &url::Url::parse("https://app.example.com/login").unwrap()));
+        // Plaintext HTTP downgrade is refused for an HTTPS item.
+        assert!(!listed_url(&https_site, &url::Url::parse("http://example.com/login").unwrap()));
+        assert!(!listed_url(&https_site, &url::Url::parse("https://notexample.com/login").unwrap()));
+
+        // Explicit HTTP item or loopback allows HTTP.
+        let explicit_http = vec![parse_site_rule("http://intranet.local:8080").unwrap()];
+        assert!(listed_url(&explicit_http, &url::Url::parse("http://intranet.local:8080/login").unwrap()));
+        assert!(!listed_url(&explicit_http, &url::Url::parse("http://intranet.local:9090/login").unwrap()));
+
+        let local = vec![parse_site_rule("localhost").unwrap()];
+        assert!(listed_url(&local, &url::Url::parse("http://localhost:3000/login").unwrap()));
+
+        // Multi-tenant hosting suffixes do not wildcard subdomains.
+        let shared = vec![parse_site_rule("https://github.io").unwrap()];
+        assert!(listed_url(&shared, &url::Url::parse("https://github.io/").unwrap()));
+        assert!(!listed_url(&shared, &url::Url::parse("https://evil.github.io/").unwrap()));
     }
 }

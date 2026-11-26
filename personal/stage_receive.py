@@ -180,11 +180,17 @@ def _assert_within_app(member_path: str, link_target: str, *, kind: str) -> None
         raise StageError(f'{kind} escapes {APP_NAME}: {member_path!r} -> {link_target!r}')
 
 
+def _is_within(path: Path, root: Path) -> bool:
+    return path == root or str(path).startswith(str(root) + os.sep)
+
+
 def safe_extract_tar(archive_path: Path, dest_dir: Path) -> None:
     """Validate every member strictly before extracting into dest_dir."""
     total_bytes = 0
     seen_app = False
     seen_meta = False
+    seen_names: set[str] = set()
+    symlink_paths: set[str] = set()
     with tarfile.open(archive_path, mode='r:*') as tf:
         members = tf.getmembers()
         if len(members) > MAX_MEMBERS:
@@ -192,6 +198,9 @@ def safe_extract_tar(archive_path: Path, dest_dir: Path) -> None:
         validated = []
         for member in members:
             clean = _clean_tar_path(member.name)
+            if clean in seen_names:
+                raise StageError(f'Duplicate archive member refused: {clean}')
+            seen_names.add(clean)
             if member.mode & 0o6000:
                 raise StageError(f'Setuid/setgid bit refused: {clean}')
             if member.isdev() or member.isfifo():
@@ -206,6 +215,7 @@ def safe_extract_tar(archive_path: Path, dest_dir: Path) -> None:
                 seen_app = True
                 if member.issym():
                     _assert_within_app(clean, member.linkname, kind='symlink')
+                    symlink_paths.add(clean)
                 elif member.islnk():
                     _assert_within_app(clean, member.linkname, kind='hardlink')
                 elif not (member.isfile() or member.isdir()):
@@ -220,35 +230,75 @@ def safe_extract_tar(archive_path: Path, dest_dir: Path) -> None:
         if not seen_app or not seen_meta:
             raise StageError('Archive must contain both Herdr Browser.app and metadata.json')
 
-        # Extract directories, regular files, hardlinks, and symlinks manually without setuid/chown.
-        deferred_hardlinks = []
-        dest_resolved = dest_dir.resolve()
+        # Refuse any member whose parent directory traverses a symlink in the archive.
         for member in validated:
-            target = (dest_dir / member.name)
+            parts = member.name.split('/')
+            for i in range(1, len(parts)):
+                prefix = '/'.join(parts[:i])
+                if prefix in symlink_paths:
+                    raise StageError(f'Archive member traverses symlink {prefix!r}: {member.name!r}')
+
+        # Pass 1: Extract directories and regular files only (no symlinks on disk yet).
+        deferred_symlinks: list[tarfile.TarInfo] = []
+        deferred_hardlinks: list[tuple[Path, Path]] = []
+        dest_resolved = dest_dir.resolve()
+        app_root = dest_resolved / APP_NAME
+        for member in validated:
+            target = dest_dir / member.name
+            allowed_root = dest_resolved if member.name == 'metadata.json' else app_root
             if member.isdir():
                 target.mkdir(parents=True, exist_ok=True)
+                if target.is_symlink() or not _is_within(target.resolve(), app_root):
+                    raise StageError(f'Directory resolves outside bundle: {member.name!r}')
                 os.chmod(target, (member.mode & 0o777) | 0o700)
             elif member.isfile():
                 target.parent.mkdir(parents=True, exist_ok=True)
+                if not _is_within(target.parent.resolve(), allowed_root):
+                    raise StageError(f'File parent escapes bundle: {member.name!r}')
                 src = tf.extractfile(member)
                 if src is None:
                     raise StageError(f'Unreadable archive member: {member.name}')
-                with src, target.open('wb') as out:
+                flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, 'O_NOFOLLOW', 0)
+                fd = os.open(target, flags, 0o600)
+                with src, os.fdopen(fd, 'wb') as out:
                     shutil.copyfileobj(src, out, length=1024 * 1024)
                 os.chmod(target, member.mode & 0o755)
             elif member.issym():
-                target.parent.mkdir(parents=True, exist_ok=True)
-                if target.exists() or target.is_symlink():
-                    target.unlink()
-                os.symlink(member.linkname, target)
+                deferred_symlinks.append(member)
             elif member.islnk():
                 deferred_hardlinks.append((target, dest_dir / member.linkname))
 
+        # Pass 2: Create symlinks after all directories and files exist.
+        created_symlinks: list[tuple[str, Path]] = []
+        for member in deferred_symlinks:
+            target = dest_dir / member.name
+            target.parent.mkdir(parents=True, exist_ok=True)
+            if not _is_within(target.parent.resolve(), app_root):
+                raise StageError(f'Symlink parent escapes bundle: {member.name!r}')
+            if target.exists() or target.is_symlink():
+                raise StageError(f'Symlink collides with existing entry: {member.name!r}')
+            os.symlink(member.linkname, target)
+            created_symlinks.append((member.name, target))
+
+        # Pass 3: Verify every symlink resolves strictly within Herdr Browser.app on disk
+        # (catches multi-hop / chained relative symlinks that pass lexical checks).
+        for name, target in created_symlinks:
+            resolved = target.resolve(strict=False)
+            if not _is_within(resolved, app_root):
+                raise StageError(f'Symlink escapes {APP_NAME}: {name!r}')
+
+        # Pass 4: Create hardlinks to verified regular files inside the bundle.
         for target, source in deferred_hardlinks:
+            if source.is_symlink() or not source.is_file():
+                raise StageError(f'Hardlink source must be a regular file inside bundle: {source}')
             src_resolved = source.resolve()
-            if not str(src_resolved).startswith(str(dest_resolved / APP_NAME) + os.sep):
+            if not _is_within(src_resolved, app_root):
                 raise StageError(f'Hardlink target outside bundle: {source}')
             target.parent.mkdir(parents=True, exist_ok=True)
+            if not _is_within(target.parent.resolve(), app_root):
+                raise StageError(f'Hardlink parent escapes bundle: {target}')
+            if target.exists() or target.is_symlink():
+                raise StageError(f'Hardlink collides with existing entry: {target}')
             os.link(src_resolved, target)
 
 

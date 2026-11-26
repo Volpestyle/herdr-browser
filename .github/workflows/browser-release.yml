@@ -51,7 +51,7 @@ jobs:
         with:
           version: ${{ env.ZIG_VERSION }}
 
-      - uses: oven-sh/setup-bun@v2
+      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2
 
       - name: Restore Rust and CEF caches
         uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
@@ -60,12 +60,8 @@ jobs:
             ~/.cargo/registry/index
             ~/.cargo/registry/cache
             ~/.cargo/git/db
-            ~/.cargo/bin/cargo-about
             ~/.local/share/herdr-browser/cef
-            target
-          key: browser-release-macos-arm64-${{ env.RUST_TOOLCHAIN }}-zig${{ env.ZIG_VERSION }}-${{ hashFiles('Cargo.lock') }}
-          restore-keys: |
-            browser-release-macos-arm64-${{ env.RUST_TOOLCHAIN }}-zig${{ env.ZIG_VERSION }}-
+          key: browser-release-macos-arm64-deps-${{ env.RUST_TOOLCHAIN }}-zig${{ env.ZIG_VERSION }}-${{ hashFiles('Cargo.lock') }}
           save-always: true
 
       - name: Install packaging tools

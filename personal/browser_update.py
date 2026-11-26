@@ -305,9 +305,21 @@ RELEASE_ENTITLEMENTS = {
     'com.apple.security.device.camera': True,
     'com.apple.security.automation.apple-events': True,
 }
+# Helpers never need AppleEvents or broad main-app permissions; GPU/Alerts need no JIT either.
+HELPER_JIT_ENTITLEMENTS = {
+    'com.apple.security.cs.allow-jit': True,
+    'com.apple.security.cs.allow-unsigned-executable-memory': True,
+}
 
 
-def sign_bundle_inside_out(destination, identity, entitlements, *, hardened_runtime=True, timestamp=True, keychain=None):
+def helper_entitlements_for(helper_app: Path, *, jit_entitlements: Path) -> Path | None:
+    if '(GPU)' in helper_app.name or '(Alerts)' in helper_app.name:
+        return None
+    return jit_entitlements
+
+
+def sign_bundle_inside_out(destination, identity, entitlements, *, hardened_runtime=True, timestamp=True, keychain=None,
+                           helper_jit_entitlements=None):
     """Sign nested CEF libraries, helper apps, and finally the outer bundle for notarization."""
     base = ['/usr/bin/codesign', '--force']
     if hardened_runtime:
@@ -332,15 +344,20 @@ def sign_bundle_inside_out(destination, identity, entitlements, *, hardened_runt
                     run([*base, item])
         run([*base, cef_fw])
 
+    jit_plist = helper_jit_entitlements or entitlements
     for helper_app in sorted(frameworks.glob('HerdrBrowser Helper*.app')):
-        run([*base, '--entitlements', entitlements, helper_app])
+        helper_ent = helper_entitlements_for(helper_app, jit_entitlements=jit_plist)
+        if helper_ent is not None:
+            run([*base, '--entitlements', helper_ent, helper_app])
+        else:
+            run([*base, helper_app])
 
     run([*base, '--entitlements', entitlements, destination])
 
 
 def package(binary, destination, version, source, patch_hash, *,
             bundle_id="dev.james.herdr-browser", stock_only=False,
-            sign_identity=None, hardened_runtime=False, timestamp=False,
+            sign_identity=None, hardened_runtime=None, timestamp=False,
             keychain=None, entitlements_dict=None):
     macos = destination / 'Contents/MacOS'
     resources = destination / 'Contents/Resources'
@@ -406,12 +423,6 @@ def package(binary, destination, version, source, patch_hash, *,
     with (destination / 'Contents/Info.plist').open('wb') as output:
         plistlib.dump(info, output)
     validate_browser_bundle(destination)
-    entitlements = destination.parent / 'chromium-entitlements.plist'
-    entitlements_payload = entitlements_dict if entitlements_dict is not None else (
-        RELEASE_ENTITLEMENTS if hardened_runtime else {'com.apple.security.cs.allow-jit': True}
-    )
-    with entitlements.open('wb') as output:
-        plistlib.dump(entitlements_payload, output)
     if sign_identity is not None:
         identity = sign_identity
     else:
@@ -419,9 +430,20 @@ def package(binary, destination, version, source, patch_hash, *,
         if bundle_id == 'dev.james.herdr-browser' and not identity_file.exists():
             raise RuntimeError('Configure a stable personal signing identity before packaging automatic updates')
         identity = identity_file.read_text().strip() if identity_file.exists() else '-'
-    if hardened_runtime or timestamp or keychain:
+    use_hardened = (identity != '-') if hardened_runtime is None else hardened_runtime
+    entitlements = destination.parent / 'chromium-entitlements.plist'
+    entitlements_payload = entitlements_dict if entitlements_dict is not None else (
+        RELEASE_ENTITLEMENTS if use_hardened else {'com.apple.security.cs.allow-jit': True}
+    )
+    with entitlements.open('wb') as output:
+        plistlib.dump(entitlements_payload, output)
+    helper_jit_entitlements = destination.parent / 'chromium-helper-jit-entitlements.plist'
+    with helper_jit_entitlements.open('wb') as output:
+        plistlib.dump(HELPER_JIT_ENTITLEMENTS if use_hardened else {'com.apple.security.cs.allow-jit': True}, output)
+    if use_hardened or timestamp or keychain:
         sign_bundle_inside_out(destination, identity, entitlements,
-                               hardened_runtime=hardened_runtime, timestamp=timestamp, keychain=keychain)
+                               hardened_runtime=use_hardened, timestamp=timestamp, keychain=keychain,
+                               helper_jit_entitlements=helper_jit_entitlements)
     else:
         run(['/usr/bin/codesign', '--force', '--deep', '--sign', identity, '--timestamp=none', '--entitlements', entitlements, destination])
     run(['/usr/bin/codesign', '--verify', '--deep', '--strict', destination])
@@ -544,12 +566,27 @@ def promote(candidate, app=APP, *, running=app_running):
     return True
 
 
+def verify_candidate_signature(candidate, *, app=APP):
+    cmd = ['/usr/bin/codesign', '--verify', '--deep', '--strict']
+    if app.is_dir():
+        probe = subprocess.run(['/usr/bin/codesign', '-dr', '-', str(app)], capture_output=True, text=True, check=False)
+        combined = (probe.stdout or '') + '\n' + (probe.stderr or '')
+        for line in combined.splitlines():
+            if line.startswith('designated => '):
+                req = line.removeprefix('designated => ').strip()
+                if req and 'cdhash ' not in req:
+                    cmd += ['-R', req if req.startswith('=') else f'={req}']
+                break
+    cmd.append(candidate)
+    run(cmd)
+
+
 def install_pending(state):
     pending = state.get('pending')
     if not pending:
         return
     candidate = Path(pending['bundle'])
-    run(['/usr/bin/codesign', '--verify', '--deep', '--strict', candidate])
+    verify_candidate_signature(candidate)
     migrate_config()
     if not promote(candidate, APP):
         state['status'] = 'staged'
@@ -571,7 +608,7 @@ def restart_and_install(state, *, app=APP, launcher=None, running=app_running, t
         print('No staged update to apply.')
         return False
     candidate = Path(pending['bundle'])
-    run(['/usr/bin/codesign', '--verify', '--deep', '--strict', candidate])
+    verify_candidate_signature(candidate, app=app)
     launcher_path = Path(launcher or Path.home() / '.local/bin/herdr-browser')
     was_running = running(app)
     if was_running:
@@ -631,7 +668,9 @@ def enable_watcher():
     write_launchers()
     agent = Path.home() / 'Library/LaunchAgents' / f'{LABEL}.plist'
     agent.parent.mkdir(parents=True, exist_ok=True)
-    info = {'Label': LABEL, 'ProgramArguments': [sys.executable, str(Path(__file__).resolve()), 'check'],
+    # Background watcher checks feeds and installs already-staged verified builds,
+    # notifying on new upstream/CEF releases without unattended compilation or auto-signing.
+    info = {'Label': LABEL, 'ProgramArguments': [sys.executable, str(Path(__file__).resolve()), 'check', '--notify-only'],
             'StartInterval': 900, 'RunAtLoad': True, 'ProcessType': 'Background',
             'LowPriorityIO': True, 'Nice': 10,
             'EnvironmentVariables': {'PATH': f'{Path.home()}/.cargo/bin:{Path.home()}/.local/bin:/opt/homebrew/bin:/usr/bin:/bin'},
@@ -641,7 +680,7 @@ def enable_watcher():
     loaded = run(['launchctl', 'print', f'gui/{os.getuid()}/{LABEL}'], capture=True, check=False).returncode == 0
     if not loaded:
         run(['launchctl', 'bootstrap', f'gui/{os.getuid()}', agent])
-    print(f'Watching stable releases every six hours; staged updates are checked every 15 minutes.\n{agent}')
+    print(f'Watching stable releases every six hours (notify-only); staged updates are checked every 15 minutes.\n{agent}')
 
 
 def chrome_version(text):
@@ -747,6 +786,8 @@ def main():
     parser.add_argument('--base')
     parser.add_argument('--engine', help='Pinned stable CEF crate version for a manual build')
     parser.add_argument('--force', action='store_true')
+    parser.add_argument('--notify-only', action='store_true',
+                        help='Check feeds and install already-staged builds without unattended cargo builds')
     args = parser.parse_args()
     if args.command == 'status':
         # Read-only, so it answers even while an update holds the lock.
@@ -784,6 +825,16 @@ def main():
             engine = args.engine or (latest_engine(state, force=args.force) if args.command == 'check' else source_engine())
             if not tag and state.get('installed', {}).get('engine') != engine:
                 tag = state.get('installed', {}).get('tag')
+            if args.notify_only:
+                if tag:
+                    installed = state.get('installed', {})
+                    if installed.get('tag') != tag or installed.get('engine') != engine:
+                        notice = f'Herdr Browser update available ({tag}, CEF {engine}); run: {UPDATE_COMMAND}'
+                        if state.get('notified_available') != f'{tag}-cef{engine}':
+                            state['notified_available'] = f'{tag}-cef{engine}'
+                            announce_codec_loss(notice)
+                write_json(LOCAL / 'state.json', state)
+                return 0
             write_json(LOCAL / 'state.json', state)
             if tag: build_candidate(tag, state, force=args.force, engine=engine)
             if args.command == 'check': install_pending(state)

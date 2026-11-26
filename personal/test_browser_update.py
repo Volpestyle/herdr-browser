@@ -292,7 +292,18 @@ class BrowserBundleTests(unittest.TestCase):
         self.assertEqual(self.package(), {'h264': True, 'cef': '156.0.15', 'sha256': updater.CEF_CODEC_SHA256[1]})
         self.assertEqual(self.packaged_binary(), b'codec')
         self.assertEqual(list((self.bundle / 'Contents/Frameworks').rglob('._*')), [])
-        self.assertEqual(len(self.signed), 1)
+        # Personal builds use inside-out Hardened Runtime signing with least-privilege helper entitlements.
+        self.assertGreaterEqual(len(self.signed), 6)
+        self.assertTrue(all('--options' in call and 'runtime' in call for call in self.signed))
+        gpu_calls = [call for call in self.signed if str(call[-1]).endswith('HerdrBrowser Helper (GPU).app')]
+        self.assertEqual(len(gpu_calls), 1)
+        self.assertNotIn('--entitlements', gpu_calls[0])
+        renderer_calls = [call for call in self.signed if str(call[-1]).endswith('HerdrBrowser Helper (Renderer).app')]
+        self.assertEqual(len(renderer_calls), 1)
+        ent_path = Path(renderer_calls[0][renderer_calls[0].index('--entitlements') + 1])
+        renderer_ent = plistlib.loads(ent_path.read_bytes())
+        self.assertNotIn('com.apple.security.automation.apple-events', renderer_ent)
+        self.assertNotIn('com.apple.security.device.camera', renderer_ent)
 
     def test_a_changed_codec_archive_stops_the_build_before_signing(self):
         archive = self.pin_archive()
@@ -318,7 +329,7 @@ class BrowserBundleTests(unittest.TestCase):
         self.assertEqual((codecs['h264'], codecs['cef']), (False, '157.0.2'))
         self.assertIn('H.264/AAC video will not play', codecs['warning'])
         self.assertIn('WARNING: CEF 157.0.2 has no codec build', errors.getvalue())
-        self.assertEqual(len(self.signed), 1)
+        self.assertGreaterEqual(len(self.signed), 6)
 
     def build_candidate(self, codecs, state=None):
         """The watcher's path: build output is redirected to a log, so the warning has to escape it."""

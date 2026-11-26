@@ -96,10 +96,14 @@ boundary: any process with this socket can send that boolean or run terminals.
 `browser.type` refuses password fields, and `browser.press` refuses input while
 a password field is active. Sign-ins go through `browser.signin {item}`: the app
 runs the 1Password CLI itself (first use needs the person's approval), and fills
-only while the page host equals, or is a subdomain of, a website listed on that
-item, rechecked right before each value. Values are inserted as page input and
-never returned, logged or passed on argv; an agent can make the app sign in to a
-site the item belongs to, never read the secret.
+only over HTTPS (unless the item explicitly lists `http://` or loopback) while
+the page host matches a website on that item (without wildcarding multi-tenant
+hosting suffixes), rechecked right before `Input.insertText` after focusing the
+input. HTTP sign-in challenges additionally refuse proxy auth and cross-origin
+subresources. Values are inserted as page input and never returned, logged, or
+passed on argv; this keeps secrets out of tool output and context for
+cooperative agents, though it does not isolate secrets from an adversarial agent
+that runs `browser.eval` or raw CDP on the same pane.
 
 Without an explicit pane, a terminal caller targets only the last browser it
 opened, using `HC_TERMINAL_ID` or `HERDR_PANE_ID`, never UI focus. This caller field is routing,

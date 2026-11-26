@@ -4,15 +4,15 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>{{TITLE}}</title>
-<script>
+<script nonce="{{NONCE}}">
 try {
   var t = localStorage.getItem('md-preview.theme')
   var dark = t === 'dark' || ((!t || t === 'auto') && matchMedia('(prefers-color-scheme: dark)').matches)
   document.documentElement.dataset.theme = dark ? 'dark' : 'light'
 } catch (e) {}
 </script>
-<link rel="stylesheet" id="hl-light" href="https://cdn.jsdelivr.net/npm/@highlightjs/cdn-assets@11/styles/github.min.css">
-<link rel="stylesheet" id="hl-dark" href="https://cdn.jsdelivr.net/npm/@highlightjs/cdn-assets@11/styles/github-dark-dimmed.min.css" disabled>
+<link rel="stylesheet" id="hl-light" href="https://cdn.jsdelivr.net/npm/@highlightjs/cdn-assets@11.12.0/styles/github.min.css" integrity="sha384-eFTL69TLRZTkNfYZOLM+G04821K1qZao/4QLJbet1pP4tcF+fdXq/9CdqAbWRl/L" crossorigin="anonymous">
+<link rel="stylesheet" id="hl-dark" href="https://cdn.jsdelivr.net/npm/@highlightjs/cdn-assets@11.12.0/styles/github-dark-dimmed.min.css" integrity="sha384-PiLidnnRuzFgp4qiN8oGNmktrV8ETL+6a8heAxljUX4A+3XWlocwaMn9duBUepfK" crossorigin="anonymous" disabled>
 <style>
 :root {
   color-scheme: light;
@@ -669,11 +669,11 @@ article.markdown { max-width: 44rem; margin: 0 auto }
     <article id="doc" class="markdown loading">loading…</article>
   </main>
 </div>
-<script>const BASE_PATH = {{BASE_PATH_JSON}}; const DOC_PATH = {{DOC_PATH_JSON}};</script>
-<script type="module">
+<script nonce="{{NONCE}}">const BASE_PATH = {{BASE_PATH_JSON}}; const DOC_PATH = {{DOC_PATH_JSON}};</script>
+<script type="module" nonce="{{NONCE}}">
 const MARKED_URL = BASE_PATH + '/__vendor/marked.esm.js'
-const HLJS_URL = 'https://cdn.jsdelivr.net/npm/@highlightjs/cdn-assets@11/es/highlight.min.js'
-const MERMAID_URL = 'https://cdn.jsdelivr.net/npm/mermaid@11/dist/mermaid.esm.min.mjs'
+const HLJS_URL = 'https://cdn.jsdelivr.net/npm/@highlightjs/cdn-assets@11.12.0/es/highlight.min.js'
+const MERMAID_URL = 'https://cdn.jsdelivr.net/npm/mermaid@11.17.2/dist/mermaid.esm.min.mjs'
 const THEME_KEY = 'md-preview.theme'
 
 const docEl = document.getElementById('doc')
@@ -1868,7 +1868,7 @@ function configureMermaid(mermaid) {
   const dark = effectiveTheme() === 'dark'
   mermaid.initialize({
     startOnLoad: false,
-    securityLevel: 'loose',
+    securityLevel: 'strict',
     theme: 'base',
     fontFamily: "-apple-system, BlinkMacSystemFont, 'SF Pro Text', 'Inter', system-ui, sans-serif",
     flowchart: { useMaxWidth: false, htmlLabels: true, padding: 14, nodeSpacing: 36, rankSpacing: 44 },
@@ -1992,6 +1992,112 @@ function rawFallback(markdown) {
   return pre
 }
 
+const SAFE_TAGS = new Set([
+  'a', 'abbr', 'article', 'audio', 'b', 'bdi', 'bdo', 'blockquote', 'br', 'caption',
+  'cite', 'code', 'col', 'colgroup', 'dd', 'del', 'details', 'dfn', 'div', 'dl', 'dt',
+  'em', 'figcaption', 'figure', 'h1', 'h2', 'h3', 'h4', 'h5', 'h6', 'hr', 'i', 'img',
+  'input', 'ins', 'kbd', 'li', 'mark', 'ol', 'p', 'picture', 'pre', 'q', 'rp', 'rt',
+  'ruby', 's', 'samp', 'section', 'small', 'source', 'span', 'strong', 'sub', 'summary',
+  'sup', 'table', 'tbody', 'td', 'tfoot', 'th', 'thead', 'time', 'tr', 'u', 'ul', 'var',
+  'video', 'wbr',
+])
+const DROP_TREE_TAGS = new Set([
+  'script', 'style', 'iframe', 'object', 'embed', 'applet', 'noscript', 'template',
+  'svg', 'math', 'form', 'textarea', 'select', 'option', 'button', 'meta', 'link', 'base',
+])
+const GLOBAL_ATTRS = new Set(['title', 'dir', 'lang', 'align'])
+const TAG_ATTRS = {
+  a: new Set(['href', 'name']),
+  img: new Set(['src', 'alt', 'width', 'height', 'loading']),
+  video: new Set(['src', 'poster', 'width', 'height', 'controls', 'loop', 'muted', 'playsinline', 'preload']),
+  audio: new Set(['src', 'controls', 'loop', 'muted', 'preload']),
+  source: new Set(['src', 'type', 'media']),
+  code: new Set(['class']),
+  pre: new Set(['class']),
+  td: new Set(['colspan', 'rowspan', 'align']),
+  th: new Set(['colspan', 'rowspan', 'align', 'scope']),
+  col: new Set(['span']),
+  colgroup: new Set(['span']),
+  ol: new Set(['start', 'type', 'reversed']),
+  li: new Set(['value']),
+  details: new Set(['open']),
+  time: new Set(['datetime']),
+  input: new Set(['type', 'checked', 'disabled']),
+}
+
+function isSafeUrl(raw, allowDataImage) {
+  const value = String(raw || '').trim()
+  if (!value) return false
+  if (value.startsWith('#') || value.startsWith('/') || value.startsWith('./') || value.startsWith('../')) {
+    return !value.startsWith('//')
+  }
+  const normalized = value.replace(/[\u0000-\u0020]+/g, '').toLowerCase()
+  if (normalized.startsWith('http:') || normalized.startsWith('https:') || normalized.startsWith('mailto:')) {
+    return true
+  }
+  if (allowDataImage && /^data:image\/(png|jpeg|jpg|gif|webp|avif);base64,/i.test(normalized)) {
+    return true
+  }
+  return !/^[a-z][a-z0-9+.-]*:/i.test(normalized)
+}
+
+function sanitizeNode(node, outDoc) {
+  if (node.nodeType === Node.TEXT_NODE) {
+    return outDoc.createTextNode(node.nodeValue || '')
+  }
+  if (node.nodeType !== Node.ELEMENT_NODE) return null
+  const tag = node.tagName.toLowerCase()
+  if (DROP_TREE_TAGS.has(tag)) return null
+  if (!SAFE_TAGS.has(tag)) {
+    const frag = outDoc.createDocumentFragment()
+    for (const child of node.childNodes) {
+      const clean = sanitizeNode(child, outDoc)
+      if (clean) frag.append(clean)
+    }
+    return frag
+  }
+  if (tag === 'input') {
+    if ((node.getAttribute('type') || '').toLowerCase() !== 'checkbox') return null
+  }
+  const el = outDoc.createElement(tag)
+  const allowed = TAG_ATTRS[tag]
+  for (const attr of node.attributes) {
+    const name = attr.name.toLowerCase()
+    if (name.startsWith('on') || name === 'style' || name === 'srcdoc') continue
+    if (!GLOBAL_ATTRS.has(name) && !(allowed && allowed.has(name))) continue
+    if (name === 'href') {
+      if (!isSafeUrl(attr.value, false)) continue
+    } else if (name === 'src' || name === 'poster') {
+      if (!isSafeUrl(attr.value, tag === 'img')) continue
+    } else if (name === 'class') {
+      const safeClasses = attr.value.split(/\s+/).filter(c => /^language-[a-z0-9_+-]+$/i.test(c))
+      if (!safeClasses.length) continue
+      el.setAttribute('class', safeClasses.join(' '))
+      continue
+    }
+    el.setAttribute(name, attr.value)
+  }
+  if (tag === 'input') {
+    el.setAttribute('type', 'checkbox')
+    el.setAttribute('disabled', '')
+  }
+  for (const child of node.childNodes) {
+    const clean = sanitizeNode(child, outDoc)
+    if (clean) el.append(clean)
+  }
+  return el
+}
+
+function sanitizeHtml(html) {
+  const parsed = new DOMParser().parseFromString(html, 'text/html')
+  const frag = document.createDocumentFragment()
+  for (const child of parsed.body.childNodes) {
+    const clean = sanitizeNode(child, document)
+    if (clean) frag.append(clean)
+  }
+  return frag
+}
+
 async function renderDoc(markdown) {
   const marked = await getMarked()
   docEl.classList.remove('loading')
@@ -2017,7 +2123,7 @@ async function renderDoc(markdown) {
   } else {
     docEl.classList.remove('rise')
   }
-  docEl.innerHTML = html
+  docEl.replaceChildren(sanitizeHtml(html))
   diagrams.length = 0
   upgradeAlerts()
   assignHeadingIds()

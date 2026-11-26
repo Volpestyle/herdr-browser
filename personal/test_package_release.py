@@ -210,6 +210,13 @@ class PublicInstallerTests(unittest.TestCase):
                         HERDR_BROWSER_VERSION='browser-v0.1.12',
                         PATH=f'{fake_bin}:{os.environ.get("PATH", "")}',
                     )
+                    # Ad-hoc signed builds must fail closed by default.
+                    refused = subprocess.run(['sh', str(PERSONAL / 'install.sh')], env=env,
+                                             capture_output=True, text=True)
+                    self.assertNotEqual(refused.returncode, 0)
+                    self.assertIn('refusing ad-hoc signed build', refused.stderr)
+
+                    env['HERDR_BROWSER_ALLOW_ADHOC'] = '1'
                     result = subprocess.run(['sh', str(PERSONAL / 'install.sh')], env=env,
                                             capture_output=True, text=True)
                     self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
@@ -249,6 +256,7 @@ class PublicInstallerTests(unittest.TestCase):
                         HOME=str(fake_home),
                         HERDR_BROWSER_BASE_URL=f'http://127.0.0.1:{port}',
                         HERDR_BROWSER_VERSION='browser-v0.1.12',
+                        HERDR_BROWSER_ALLOW_ADHOC='1',
                         PATH=f'{fake_bin}:{os.environ.get("PATH", "")}',
                     )
                     subprocess.run(['sh', str(PERSONAL / 'install.sh')], env=env, check=True, capture_output=True)

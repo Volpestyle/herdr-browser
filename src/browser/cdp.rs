@@ -400,7 +400,7 @@ pub struct Router {
 }
 
 /// Root (browser-session) methods that pass through unchanged.
-const ROOT_PASS: &[&str] = &["Browser.getVersion", "Target.setAutoAttach", "Target.setDiscoverTargets"];
+const ROOT_PASS: &[&str] = &["Browser.getVersion", "Target.setDiscoverTargets"];
 /// Root methods addressed to one target, which must be an agent-profile target.
 const ROOT_TARGET: &[&str] = &[
     "Target.attachToTarget",
@@ -438,7 +438,8 @@ fn page_method(method: &str, params: &Value, own: Option<&str>) -> bool {
         // Playwright 1.65 subscribes to its own page's crash and detach notices.
         "Inspector" => matches!(name, "enable" | "disable"),
         "Target" => match name {
-            "setAutoAttach" | "detachFromTarget" => true,
+            "setAutoAttach" => params["autoAttach"] != true || params["flatten"] == true,
+            "detachFromTarget" => true,
             "getTargetInfo" => params.get("targetId").is_none_or(|t| t.as_str().is_some_and(|t| Some(t) == own)),
             _ => false,
         },
@@ -540,6 +541,10 @@ impl Router {
                 }
                 if method == "Target.getTargets" {
                     filter = Filter::Targets;
+                } else if method == "Target.setAutoAttach" {
+                    if params["autoAttach"] == true && params["flatten"] != true {
+                        return deny("Herdr requires flattened CDP sessions");
+                    }
                 } else if method == "Target.getTargetInfo" && params.get("targetId").is_none() {
                     // The browser target's own info: no page, no profile.
                 } else if method == "Target.attachToTarget" || ROOT_TARGET.contains(&method) {
@@ -1249,5 +1254,37 @@ mod tests {
             "params": {"type": "mouseMoved", "x": "oops", "y": 10}
         }));
         assert_eq!(bad.len(), 1);
+    }
+
+    #[test]
+    fn non_flattened_auto_attach_is_refused_on_root_and_page_sessions() {
+        let mut r = attached_page();
+        // Root session: enabling autoAttach without flatten: true is denied (could pause person targets).
+        assert!(denied(&r.from_client(1, json!({
+            "id": 1, "method": "Target.setAutoAttach",
+            "params": {"autoAttach": true, "waitForDebuggerOnStart": true, "flatten": false}
+        }))));
+        assert!(denied(&r.from_client(1, json!({
+            "id": 2, "method": "Target.setAutoAttach",
+            "params": {"autoAttach": true, "waitForDebuggerOnStart": true}
+        }))));
+        // Root session: flatten: true and disabling autoAttach still pass.
+        assert_eq!(sent(&r.from_client(1, json!({
+            "id": 3, "method": "Target.setAutoAttach",
+            "params": {"autoAttach": true, "waitForDebuggerOnStart": true, "flatten": true}
+        })))["method"], "Target.setAutoAttach");
+        assert_eq!(sent(&r.from_client(1, json!({
+            "id": 4, "method": "Target.setAutoAttach",
+            "params": {"autoAttach": false, "waitForDebuggerOnStart": false}
+        })))["method"], "Target.setAutoAttach");
+        // Page session: same rule applies.
+        assert!(denied(&r.from_client(1, json!({
+            "id": 5, "method": "Target.setAutoAttach", "sessionId": "A1",
+            "params": {"autoAttach": true, "waitForDebuggerOnStart": true, "flatten": false}
+        }))));
+        assert_eq!(sent(&r.from_client(1, json!({
+            "id": 6, "method": "Target.setAutoAttach", "sessionId": "A1",
+            "params": {"autoAttach": true, "waitForDebuggerOnStart": true, "flatten": true}
+        })))["method"], "Target.setAutoAttach");
     }
 }

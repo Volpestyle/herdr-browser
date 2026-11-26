@@ -23,6 +23,16 @@ pub fn listen(tx: async_channel::Sender<Request>) {
         tracing::warn!("another Herdr is serving {}; `herdr-app do` goes there", path.display());
         return;
     }
+    // Keep the app home owner-only before binding the socket (closes bind-to-chmod races
+    // and protects screenshots, downloads, and Chromium profile files on multi-user systems).
+    #[cfg(unix)]
+    if let Some(parent) = path.parent() {
+        use std::os::unix::fs::PermissionsExt;
+        let _ = std::fs::create_dir_all(parent);
+        if let Err(e) = std::fs::set_permissions(parent, std::fs::Permissions::from_mode(0o700)) {
+            tracing::warn!("cannot restrict {}: {e}", parent.display());
+        }
+    }
     let _ = std::fs::remove_file(&path);
     let listener = match UnixListener::bind(&path) {
         Ok(l) => l,

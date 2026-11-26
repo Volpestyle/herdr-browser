@@ -154,8 +154,34 @@ impl SessionState {
 
 /// A page's HTTP sign-in challenge, answered from the pane. Dropping it cancels.
 pub struct Auth {
-    host: String,
-    reply: Option<Box<dyn FnOnce(Option<(String, String)>)>>,
+    pub origin: String,
+    pub host: String,
+    pub port: i32,
+    pub is_proxy: bool,
+    pub realm: String,
+    pub reply: Option<Box<dyn FnOnce(Option<(String, String)>)>>,
+}
+impl Auth {
+    fn prompt_label(&self) -> String {
+        let target = if self.is_proxy {
+            if self.port > 0 {
+                format!("proxy {}:{}", self.host, self.port)
+            } else {
+                format!("proxy {}", self.host)
+            }
+        } else if !self.origin.is_empty() {
+            self.origin.clone()
+        } else if self.port > 0 {
+            format!("{}:{}", self.host, self.port)
+        } else {
+            self.host.clone()
+        };
+        if self.realm.is_empty() {
+            format!("Sign in to {target}")
+        } else {
+            format!("Sign in to {target} ({})", self.realm)
+        }
+    }
 }
 impl Drop for Auth {
     fn drop(&mut self) {
@@ -166,8 +192,28 @@ impl Drop for Auth {
 }
 impl std::fmt::Debug for Auth {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "Auth({})", self.host)
+        write!(f, "Auth(proxy={}, origin={}, host={}:{})", self.is_proxy, self.origin, self.host, self.port)
     }
+}
+
+#[cfg(target_os = "macos")]
+fn auth_challenge_url(origin: &str, host: &str, port: i32) -> Option<url::Url> {
+    if let Ok(parsed) = url::Url::parse(origin.trim()) {
+        if matches!(parsed.scheme(), "http" | "https") && parsed.host_str().is_some() {
+            return Some(parsed);
+        }
+    }
+    let host = host.trim();
+    if host.is_empty() {
+        return None;
+    }
+    // Without an origin URL from CEF, never assume HTTPS.
+    let candidate = if port > 0 && port <= 65535 {
+        format!("http://{host}:{port}/")
+    } else {
+        format!("http://{host}/")
+    };
+    url::Url::parse(&candidate).ok()
 }
 
 /// Normalize address-bar input, while keeping non-web schemes out of navigation.
@@ -669,14 +715,30 @@ impl Browser {
 
     #[cfg(target_os = "macos")]
     fn http_sign_in(&mut self, login: control::Login, cx: &mut Context<Self>) -> Result<Value, String> {
-        let host = self
+        let auth = self
             .auth
             .as_ref()
-            .map(|a| a.host.to_ascii_lowercase())
             .ok_or("The page no longer asks for a sign-in")?;
-        if !control::listed(&login.urls, &host) {
-            return Err(format!("The credentials do not list {host}; refusing to sign in"));
+        if auth.is_proxy {
+            return Err("Refusing to fill website credentials into a proxy sign-in challenge".into());
         }
+        let challenge_url = auth_challenge_url(&auth.origin, &auth.host, auth.port)
+            .ok_or("The sign-in challenge did not name a valid web origin")?;
+        // Refuse cross-origin subresource HTTP auth prompts (e.g., an embedded image on another site).
+        if let Ok(page_url) = url::Url::parse(&self.url) {
+            if page_url.host_str().map(str::to_ascii_lowercase)
+                != challenge_url.host_str().map(str::to_ascii_lowercase)
+            {
+                return Err("Refusing cross-origin HTTP sign-in challenge".into());
+            }
+        }
+        if !control::listed_url(&login.sites, &challenge_url) {
+            return Err(format!(
+                "The credentials do not allow {}; refusing to sign in",
+                challenge_url.origin().ascii_serialization()
+            ));
+        }
+        let host = auth.host.to_ascii_lowercase();
         self.answer(Some((login.username, login.password)));
         cx.notify();
         Ok(json!({"ok":true,"filled":["username","password"],"auth":host}))
@@ -1249,7 +1311,7 @@ impl Render for Browser {
                         .child(message),
                 )
             })
-            .when_some(self.auth.as_ref().map(|a| a.host.clone()), |el, host| {
+            .when_some(self.auth.as_ref().map(Auth::prompt_label), |el, prompt| {
                 let field = |input: &Entity<InputState>| {
                     div()
                         .w(px(180.))
@@ -1287,7 +1349,7 @@ impl Render for Browser {
                         .border_b_1()
                         .border_color(color("border"))
                         .text_size(px(12.))
-                        .child(format!("Sign in to {host}"))
+                        .child(prompt)
                         .child(field(&self.credentials[0]))
                         .child(field(&self.credentials[1]))
                         .child(answer("browser-auth-submit", "Sign in", true))
@@ -1340,7 +1402,11 @@ mod tests {
         let challenge = || {
             let answers = answers.clone();
             super::Event::Auth(super::Auth {
+                origin: "https://example.com".into(),
                 host: "example.com".into(),
+                port: 443,
+                is_proxy: false,
+                realm: String::new(),
                 reply: Some(Box::new(move |login| answers.borrow_mut().push(login))),
             })
         };

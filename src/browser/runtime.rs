@@ -231,6 +231,11 @@ pub fn start() -> anyhow::Result<()> {
     let args = args::Args::new();
     let profile = crate::mods::app_dir().join("chromium");
     std::fs::create_dir_all(&profile)?;
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let _ = std::fs::set_permissions(&profile, std::fs::Permissions::from_mode(0o700));
+    }
     // CEF canonicalizes root_cache_path itself; give every cache the same
     // canonical prefix (not /tmp beside /private/tmp on macOS).
     let profile = profile.canonicalize()?;
@@ -287,6 +292,11 @@ pub fn request_context(profile: &str) -> anyhow::Result<Option<RequestContext>> 
         "agent" => {
             let path = crate::mods::app_dir().join("chromium/Agent");
             std::fs::create_dir_all(&path)?;
+            #[cfg(unix)]
+            {
+                use std::os::unix::fs::PermissionsExt;
+                let _ = std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o700));
+            }
             let path = path.canonicalize()?;
             let settings = RequestContextSettings {
                 cache_path: path.to_string_lossy().as_ref().into(),
