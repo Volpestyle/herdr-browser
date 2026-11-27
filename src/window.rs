@@ -4259,6 +4259,59 @@ impl AppWindow {
         self.reload_config(window, cx);
     }
 
+    fn browser_caller_identity(&self, cmd: &Value) -> (Option<String>, Option<String>) {
+        let terminal = cmd["caller_terminal"]
+            .as_str()
+            .map(str::trim)
+            .filter(|s| !s.is_empty());
+        let ext_id = cmd["caller_agent"]
+            .as_str()
+            .map(str::trim)
+            .filter(|s| !s.is_empty());
+        let ext_label = cmd["caller_label"]
+            .as_str()
+            .map(str::trim)
+            .filter(|s| !s.is_empty());
+        if let Some(t) = terminal {
+            let owned_addr = if self.model.agents.contains_key(t) || self.model.pane_of(t).is_some() {
+                None
+            } else {
+                self.model.address_of(t)
+            };
+            let addr = owned_addr.as_deref().unwrap_or(t);
+            let app = self
+                .model
+                .agents
+                .get(addr)
+                .and_then(|a| a.app.as_deref())
+                .filter(|s| !s.is_empty())
+                .or(ext_label);
+            let custom_tab = self
+                .model
+                .pane_of(addr)
+                .and_then(|p| self.model.tab_of(&p))
+                .map(|c| c.name.trim())
+                .filter(|n| !n.is_empty() && !n.chars().all(|ch| ch.is_ascii_digit()));
+            let label = match (app, custom_tab) {
+                (Some(app), Some(tab)) if tab.eq_ignore_ascii_case(app) => app.to_string(),
+                (Some(app), Some(tab)) => format!("{app} · {tab}"),
+                (Some(app), None) => format!("{app} · {addr}"),
+                (None, Some(tab)) => tab.to_string(),
+                (None, None) => self
+                    .program(addr)
+                    .as_str()
+                    .filter(|s| !s.is_empty())
+                    .map(str::to_owned)
+                    .unwrap_or_else(|| t.to_string()),
+            };
+            return (Some(t.to_string()), Some(label));
+        }
+        if let Some(id) = ext_id {
+            return (Some(id.to_string()), ext_label.map(str::to_owned));
+        }
+        (None, ext_label.map(str::to_owned))
+    }
+
     fn handle(&mut self, req: Request, window: &mut Window, cx: &mut Context<Self>) {
         match req {
             Request::Run { name, args } => self.run(&name, args, window, cx),
@@ -4271,6 +4324,7 @@ impl AppWindow {
                 let name = cmd["do"].as_str().unwrap_or("").to_string();
                 if name.starts_with("browser.") {
                     let caller = cmd["caller_terminal"].as_str().map(str::to_owned);
+                    let (cursor_caller, cursor_label) = self.browser_caller_identity(&cmd);
                     if !cmd["args"].is_object() { cmd["args"] = json!({}); }
                     if matches!(name.as_str(), "browser.open" | "browser.markdown")
                         && cmd["args"].get("space").is_none()
@@ -4303,13 +4357,23 @@ impl AppWindow {
                             if let Some(arg) = crate::commands::missing(command, args) { return Err(format!("{name} needs {arg}")); }
                             let view = args["pane"].as_str().and_then(|p| self.copies.get(p)).and_then(|c| c.browser.as_ref()).ok_or("No native browser at this pane; it may be closed")?;
                             let mut args = args.clone();
-                            if let Some(caller) = &caller { args["caller"] = caller.as_str().into(); }
+                            if let Some(c) = &cursor_caller { args["caller"] = c.as_str().into(); }
+                            if let Some(l) = &cursor_label { args["caller_label"] = l.as_str().into(); }
                             view.update(cx, |view, cx| view.page_command(&name, &args, Some(reply.clone()), cx))
                         })();
                         if let Err(error) = result { let _ = reply.send(json!({"error":error})); }
                         return;
                     }
+                    let target_pane = cmd["args"]["pane"].as_str().map(str::to_owned);
                     let value = self.control(cmd, window, cx);
+                    if value.get("error").is_none()
+                        && matches!(name.as_str(), "browser.navigate" | "browser.back" | "browser.forward" | "browser.reload")
+                    {
+                        let pane = value["pane"].as_str().or(target_pane.as_deref());
+                        if let Some(view) = pane.and_then(|p| self.copies.get(p)).and_then(|c| c.browser.as_ref()) {
+                            view.read(cx).note_agent_activity(cursor_caller.as_deref(), cursor_label.as_deref());
+                        }
+                    }
                     if matches!(name.as_str(), "browser.open" | "browser.split" | "browser.markdown") {
                         if let (Some(caller), Some(pane)) = (caller, value["pane"].as_str()) {
                             self.browser_openers.insert(caller, pane.into());

@@ -136,6 +136,10 @@ pub fn client(args: &[String]) -> i32 {
         .filter_map(|key| std::env::var(key).ok()).find(|value| !value.is_empty()) {
         if !terminal.is_empty() { cmd["caller_terminal"] = terminal.into(); }
     }
+    if let Some((agent_id, agent_label)) = external_agent_identity() {
+        cmd["caller_agent"] = agent_id.into();
+        cmd["caller_label"] = agent_label.into();
+    }
     let mut stream = match UnixStream::connect(socket()) {
         Ok(s) => s,
         Err(_) if args.first().is_some_and(|v| v == "feedback") => {
@@ -214,6 +218,41 @@ pub fn save_shot<C: gpui::AppContext>(
         let _ = std::fs::remove_file(&temporary);
     }
     result
+}
+
+fn external_agent_identity() -> Option<(String, String)> {
+    let env_val = |k: &str| {
+        std::env::var(k)
+            .ok()
+            .map(|v| v.trim().to_string())
+            .filter(|v| !v.is_empty())
+    };
+    if let Some(id) = env_val("HERDR_AGENT_ID") {
+        let label = env_val("HERDR_AGENT_NAME").unwrap_or_else(|| id.clone());
+        return Some((id, label));
+    }
+    if let Some(name) = env_val("HERDR_AGENT_NAME") {
+        return Some((format!("agent:{name}"), name));
+    }
+    if let Some(id) = env_val("ANTIGRAVITY_CONVERSATION_ID") {
+        return Some((format!("ag:{id}"), "antigravity".into()));
+    }
+    if let Some(id) = env_val("CLAUDE_SESSION_ID") {
+        return Some((format!("claude:{id}"), "claude".into()));
+    }
+    if let Some(id) = env_val("CODEX_THREAD_ID").or_else(|| env_val("CODEX_SESSION_ID")) {
+        return Some((format!("codex:{id}"), "codex".into()));
+    }
+    if let Some(id) = env_val("OPENCODE_SESSION_ID") {
+        return Some((format!("opencode:{id}"), "opencode".into()));
+    }
+    if env_val("CLAUDECODE").is_some() {
+        return Some(("claude".into(), "claude".into()));
+    }
+    if env_val("ANTIGRAVITY_AGENT").is_some() {
+        return Some(("antigravity".into(), "antigravity".into()));
+    }
+    None
 }
 
 fn fail(message: &str) -> i32 {

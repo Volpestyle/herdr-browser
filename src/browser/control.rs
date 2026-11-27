@@ -1,6 +1,6 @@
 //! Pane-local, in-process CDP. All calls and observer callbacks stay on CEF's UI thread.
 //! No debugger socket, native input, or window activation is involved.
-use super::PointerAction;
+use super::{PointerAction, PointerUpdate};
 use base64::Engine as _;
 use cef::*;
 use gpui::{BackgroundExecutor, FutureExt};
@@ -235,8 +235,9 @@ pub struct Control {
     _registration: Registration,
     snapshot: RefCell<Snapshot>,
     busy: Cell<bool>,
-    pointer: Box<dyn Fn(Option<&str>, f64, f64, PointerAction) -> bool>,
+    pointer: Box<dyn Fn(PointerUpdate<'_>) -> bool>,
     caller: RefCell<Option<String>>,
+    caller_label: RefCell<Option<String>>,
     cursor: fn(Option<&str>) -> Vec<u8>,
     idle_ms: fn() -> u64,
     on_target: Box<dyn Fn(String, bool)>,
@@ -253,7 +254,7 @@ impl Drop for Busy<'_> {
 impl Control {
     pub fn new(
         browser: &Browser,
-        pointer: Box<dyn Fn(Option<&str>, f64, f64, PointerAction) -> bool>,
+        pointer: Box<dyn Fn(PointerUpdate<'_>) -> bool>,
         cursor: fn(Option<&str>) -> Vec<u8>,
         idle_ms: fn() -> u64,
         on_target: Box<dyn Fn(String, bool)>,
@@ -276,11 +277,29 @@ impl Control {
             busy: Cell::new(false),
             pointer,
             caller: RefCell::new(None),
+            caller_label: RefCell::new(None),
             cursor,
             idle_ms,
             on_target,
             recording,
             wheeled: Cell::new(None),
+        })
+    }
+
+    fn emit_pointer(
+        &self,
+        pos: Option<(f64, f64)>,
+        rect: Option<[f64; 4]>,
+        action: PointerAction,
+    ) -> bool {
+        let caller = self.caller.borrow().clone();
+        let label = self.caller_label.borrow().clone();
+        (self.pointer)(PointerUpdate {
+            caller: caller.as_deref(),
+            label: label.as_deref(),
+            pos,
+            rect,
+            action,
         })
     }
 
@@ -532,7 +551,11 @@ impl Control {
         Ok(())
     }
 
-    async fn point(&self, node: i64, ex: &BackgroundExecutor) -> Result<(f64, f64), String> {
+    async fn point_and_rect(
+        &self,
+        node: i64,
+        ex: &BackgroundExecutor,
+    ) -> Result<((f64, f64), Option<[f64; 4]>), String> {
         self.call(
             "DOM.scrollIntoViewIfNeeded",
             json!({"backendNodeId":node}),
@@ -548,15 +571,54 @@ impl Control {
             .ok_or("Element has no visible box; snapshot again")?;
         let mut x = 0.;
         let mut y = 0.;
+        let mut min_x = f64::INFINITY;
+        let mut min_y = f64::INFINITY;
+        let mut max_x = f64::NEG_INFINITY;
+        let mut max_y = f64::NEG_INFINITY;
         for pair in q.chunks(2) {
-            x += pair[0].as_f64().ok_or("Invalid element box")?;
-            y += pair[1].as_f64().ok_or("Invalid element box")?;
+            let px = pair[0].as_f64().ok_or("Invalid element box")?;
+            let py = pair[1].as_f64().ok_or("Invalid element box")?;
+            x += px;
+            y += py;
+            min_x = min_x.min(px);
+            min_y = min_y.min(py);
+            max_x = max_x.max(px);
+            max_y = max_y.max(py);
         }
-        Ok((x / 4., y / 4.))
+        let rect = (min_x.is_finite()
+            && min_y.is_finite()
+            && max_x > min_x
+            && max_y > min_y)
+            .then_some([min_x, min_y, max_x - min_x, max_y - min_y]);
+        Ok(((x / 4., y / 4.), rect))
+    }
+
+    async fn active_element_target(&self, ex: &BackgroundExecutor) -> Option<((f64, f64), [f64; 4])> {
+        let val = self
+            .evaluate(
+                "(() => { let e = document.activeElement; while (e?.shadowRoot?.activeElement) e = e.shadowRoot.activeElement; if (!e || e === document.body || e === document.documentElement) return null; const r = e.getBoundingClientRect(); return (r.width >= 1 && r.height >= 1) ? [r.left, r.top, r.width, r.height] : null; })()",
+                ex,
+            )
+            .await
+            .ok()?;
+        let arr = val.as_array()?;
+        if arr.len() != 4 {
+            return None;
+        }
+        let rect = [
+            arr[0].as_f64()?,
+            arr[1].as_f64()?,
+            arr[2].as_f64()?,
+            arr[3].as_f64()?,
+        ];
+        if !rect.iter().all(|v| v.is_finite()) {
+            return None;
+        }
+        Some(((rect[0] + rect[2] / 2., rect[1] + rect[3] / 2.), rect))
     }
 
     async fn click(&self, node: i64, ex: &BackgroundExecutor) -> Result<(), String> {
-        let (x, y) = self.point(node, ex).await?;
+        let ((x, y), rect) = self.point_and_rect(node, ex).await?;
         // Hit-test after scrolling; never click a covering element by accident.
         let hit = self
             .call(
@@ -602,7 +664,7 @@ impl Control {
             let expression = format!("globalThis.__herdrRecordAs?.({}, {})", json!(caller.as_deref().unwrap_or_default()), json!(svg));
             let _ = self.evaluate(&expression, ex).await;
         }
-        if (self.pointer)(caller.as_deref(), x, y, PointerAction::Click) {
+        if self.emit_pointer(Some((x, y)), rect, PointerAction::Click) {
             ex.timer(Duration::from_millis(350)).await;
         }
         for kind in ["mousePressed", "mouseReleased"] {
@@ -618,7 +680,15 @@ impl Control {
 
     /// Wheels at `point` (default: the middle of the viewport, which is over the
     /// content on pages with fixed chrome at the edges) and reports what moved.
-    async fn wheel(&self, point: Option<(f64, f64)>, dx: f64, dy: f64, via: Option<&str>, ex: &BackgroundExecutor) -> Result<Value, String> {
+    async fn wheel(
+        &self,
+        point: Option<(f64, f64)>,
+        rect: Option<[f64; 4]>,
+        dx: f64,
+        dy: f64,
+        via: Option<&str>,
+        ex: &BackgroundExecutor,
+    ) -> Result<Value, String> {
         let point = point.map_or(Value::Null, |(x, y)| json!([x, y]));
         let script = format!("{SCROLL_STATE}\n{}", SCROLLERS.replace("__POINT__", &point.to_string()));
         let before = self.evaluate(&script, ex).await?;
@@ -632,7 +702,7 @@ impl Control {
             let expression = format!("globalThis.__herdrRecordAs?.({}, {})", json!(caller.as_deref().unwrap_or_default()), json!(svg));
             let _ = self.evaluate(&expression, ex).await;
         }
-        (self.pointer)(caller.as_deref(), x, y, PointerAction::Scroll);
+        self.emit_pointer(Some((x, y)), rect, PointerAction::Scroll);
         // Unasked, a page Chromium is not rendering gets the script: a wheel would stall there.
         let script = via.map_or(before["hidden"] == true, |via| via == "script");
         if script && before["frame"] != true {
@@ -906,6 +976,19 @@ impl Control {
         }
         let _busy = Busy(&self.busy);
         *self.caller.borrow_mut() = args["caller"].as_str().map(str::to_owned);
+        *self.caller_label.borrow_mut() = args["caller_label"].as_str().map(str::to_owned);
+        if matches!(
+            command,
+            "browser.snapshot"
+                | "browser.eval"
+                | "browser.download"
+                | "browser.read"
+                | "browser.wait"
+                | "browser.screenshot"
+                | "browser.cdp"
+        ) {
+            self.emit_pointer(None, None, PointerAction::Activity);
+        }
         match command {
             "browser.record" => match args["action"].as_str() {
                 Some("start") => self.record_start(ex).await,
@@ -922,7 +1005,14 @@ impl Control {
                 let context = target["browserContextId"]
                     .as_str()
                     .ok_or("Chromium did not name this page's profile")?;
-                let endpoint = super::cdp::endpoint(context, args["pane"].as_str())?;
+                let caller = self.caller.borrow().clone();
+                let label = self.caller_label.borrow().clone();
+                let endpoint = super::cdp::endpoint(
+                    context,
+                    args["pane"].as_str(),
+                    caller.as_deref(),
+                    label.as_deref(),
+                )?;
                 Ok(json!({"endpoint":endpoint,"targetId":target["targetId"],"type":target["type"],"url":target["url"]}))
             }
             "browser.snapshot" => {
@@ -1241,6 +1331,7 @@ impl Control {
                 self.editable_target(node, ex).await?;
                 self.call("Input.insertText", json!({"text":text}), ex)
                     .await?;
+                self.emit_pointer(None, None, PointerAction::Activity);
                 if args["submit"] == true {
                     self.press("Enter", ex).await?;
                 }
@@ -1277,6 +1368,11 @@ impl Control {
                 Ok(json!({"ok":true,"filled":filled,"url":self.version(ex).await?["page"]["url"]}))
             }
             "browser.press" => {
+                if let Some((pos, rect)) = self.active_element_target(ex).await {
+                    self.emit_pointer(Some(pos), Some(rect), PointerAction::Activity);
+                } else {
+                    self.emit_pointer(None, None, PointerAction::Activity);
+                }
                 self.press(args["key"].as_str().ok_or("key is required")?, ex)
                     .await?;
                 Ok(json!({"ok":true}))
@@ -1303,9 +1399,8 @@ impl Control {
                 }
                 if !wheel {
                     let node = self.node(args, ex).await?;
-                    if let Ok((x, y)) = self.point(node, ex).await {
-                        let caller = self.caller.borrow().clone();
-                        (self.pointer)(caller.as_deref(), x, y, PointerAction::Scroll);
+                    if let Ok((pos, rect)) = self.point_and_rect(node, ex).await {
+                        self.emit_pointer(Some(pos), rect, PointerAction::Scroll);
                     } else {
                         self.call(
                             "DOM.scrollIntoViewIfNeeded",
@@ -1313,15 +1408,17 @@ impl Control {
                             ex,
                         )
                         .await?;
+                        self.emit_pointer(None, None, PointerAction::Scroll);
                     }
                     return Ok(json!({"ok":true}));
                 }
-                let point = if element {
-                    Some(self.point(self.node(args, ex).await?, ex).await?)
+                let (point, rect) = if element {
+                    let (pos, rect) = self.point_and_rect(self.node(args, ex).await?, ex).await?;
+                    (Some(pos), rect)
                 } else {
-                    None
+                    (None, None)
                 };
-                self.wheel(point, dx, dy, via, ex).await
+                self.wheel(point, rect, dx, dy, via, ex).await
             }
             "browser.wait" => {
                 let count = ["text", "url", "load", "settled"]

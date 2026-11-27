@@ -7,7 +7,7 @@
 //! every target outside the agent profile, denies browser-level methods that
 //! could reach person sessions or close the app, and pins profile-scoped
 //! methods to the agent profile.
-use super::PointerAction;
+use super::{PointerAction, PointerUpdate};
 use dispatch2::DispatchQueue;
 use serde_json::{Value, json};
 use std::collections::{HashMap, HashSet};
@@ -17,7 +17,7 @@ use std::net::{TcpListener, TcpStream};
 use std::os::fd::FromRawFd;
 use std::sync::mpsc;
 use std::sync::{Arc, Mutex, OnceLock};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 /// Herdr's ends: (to Chromium, from Chromium). Closing them quits Chromium.
 static PIPE: OnceLock<Mutex<Option<(File, File)>>> = OnceLock::new();
@@ -25,7 +25,15 @@ static BRIDGE: OnceLock<Result<Arc<Bridge>, String>> = OnceLock::new();
 const MAX_CLIENTS: usize = 8;
 /// Connections being served at once, counted before the handshake.
 const MAX_CONNECTIONS: usize = 16;
+const MAX_CALLER_TOKENS: usize = 64;
+const ACTIVITY_THROTTLE: Duration = Duration::from_millis(250);
 static CONNECTIONS: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct CallerIdentity {
+    pub key: String,
+    pub label: Option<String>,
+}
 
 /// Releases a connection slot when its thread ends.
 struct Slot;
@@ -87,7 +95,13 @@ pub fn reserved() -> bool {
 
 /// Start (once) and return the guarded endpoint for this agent profile.
 /// `pane` is the agent pane asking; Playwright's new pages open beside it.
-pub fn endpoint(agent_context: &str, pane: Option<&str>) -> Result<String, String> {
+/// `caller` / `label` bind the minted token to that agent's cursor color and badge across reconnects.
+pub fn endpoint(
+    agent_context: &str,
+    pane: Option<&str>,
+    caller: Option<&str>,
+    label: Option<&str>,
+) -> Result<String, String> {
     let bridge = BRIDGE
         .get_or_init(Bridge::start)
         .clone()?;
@@ -95,12 +109,17 @@ pub fn endpoint(agent_context: &str, pane: Option<&str>) -> Result<String, Strin
     if let (Some(pane), Ok(mut origin)) = (pane, bridge.origin.lock()) {
         origin.get_or_insert_with(|| pane.to_string());
     }
-    Ok(format!("ws://127.0.0.1:{}/devtools/browser/{}", bridge.port, bridge.token))
+    let tok = bridge.token_for_caller(caller, label)?;
+    Ok(format!("ws://127.0.0.1:{}/devtools/browser/{tok}", bridge.port))
 }
 
 struct Bridge {
     port: u16,
-    token: String,
+    default_token: String,
+    tokens: Mutex<HashMap<String, CallerIdentity>>,
+    caller_tokens: Mutex<HashMap<String, String>>,
+    identities: Mutex<HashMap<u64, CallerIdentity>>,
+    activity_throttle: Mutex<HashMap<(u64, String), Instant>>,
     to: Mutex<File>,
     router: Mutex<Router>,
     clients: Mutex<HashMap<u64, mpsc::Sender<Option<String>>>>,
@@ -115,9 +134,19 @@ impl Bridge {
             .ok_or("Playwright access is unavailable: Chromium's DevTools pipe was not reserved")?;
         let listener = TcpListener::bind(("127.0.0.1", 0)).map_err(|e| e.to_string())?;
         let port = listener.local_addr().map_err(|e| e.to_string())?.port();
+        let default_token = token()?;
+        let mut tokens = HashMap::new();
+        tokens.insert(
+            default_token.clone(),
+            CallerIdentity { key: "cdp".into(), label: Some("Playwright".into()) },
+        );
         let bridge = Arc::new(Self {
             port,
-            token: token()?,
+            default_token,
+            tokens: Mutex::new(tokens),
+            caller_tokens: Mutex::new(HashMap::new()),
+            identities: Mutex::new(HashMap::new()),
+            activity_throttle: Mutex::new(HashMap::new()),
             to: Mutex::new(to),
             router: Mutex::new(Router::default()),
             clients: Mutex::new(HashMap::new()),
@@ -156,6 +185,33 @@ impl Bridge {
         Ok(bridge)
     }
 
+    fn token_for_caller(&self, caller: Option<&str>, label: Option<&str>) -> Result<String, String> {
+        let Some(key) = caller.map(str::trim).filter(|s| !s.is_empty()) else {
+            return Ok(self.default_token.clone());
+        };
+        let label = label.map(str::trim).filter(|s| !s.is_empty()).map(str::to_owned);
+        let mut caller_tokens = self.caller_tokens.lock().map_err(|_| "CDP bridge failed")?;
+        let mut tokens = self.tokens.lock().map_err(|_| "CDP bridge failed")?;
+        if let Some(existing) = caller_tokens.get(key).cloned() {
+            if let Some(entry) = tokens.get_mut(&existing)
+                && label.is_some()
+            {
+                entry.label = label;
+            }
+            return Ok(existing);
+        }
+        if tokens.len() >= MAX_CALLER_TOKENS {
+            return Ok(self.default_token.clone());
+        }
+        let fresh = token()?;
+        tokens.insert(
+            fresh.clone(),
+            CallerIdentity { key: key.to_owned(), label },
+        );
+        caller_tokens.insert(key.to_owned(), fresh.clone());
+        Ok(fresh)
+    }
+
     fn dispatch(self: &Arc<Self>, outs: Vec<Out>) {
         for out in outs {
             match out {
@@ -181,10 +237,37 @@ impl Bridge {
                         bridge.dispatch(outs);
                     });
                 }
-                Out::Pointer { target, client, x, y, action } => {
-                    let caller = format!("cdp:{client}");
+                Out::Pointer { target, client, pos, action } => {
+                    if action == PointerAction::Activity && pos.is_none() {
+                        let now = Instant::now();
+                        if let Ok(mut throttle) = self.activity_throttle.lock() {
+                            let key = (client, target.clone());
+                            if throttle.get(&key).is_some_and(|last| now.duration_since(*last) < ACTIVITY_THROTTLE) {
+                                continue;
+                            }
+                            throttle.insert(key, now);
+                        }
+                    }
+                    let identity = self
+                        .identities
+                        .lock()
+                        .ok()
+                        .and_then(|m| m.get(&client).cloned())
+                        .unwrap_or_else(|| CallerIdentity {
+                            key: format!("cdp:{client}"),
+                            label: Some("Playwright".into()),
+                        });
                     DispatchQueue::main().exec_async(move || {
-                        super::macos::move_pointer_for_target(&target, Some(&caller), x, y, action);
+                        super::macos::move_pointer_for_target(
+                            &target,
+                            PointerUpdate {
+                                caller: Some(&identity.key),
+                                label: identity.label.as_deref(),
+                                pos,
+                                rect: None,
+                                action,
+                            },
+                        );
                     });
                 }
                 Out::Close(id) => {
@@ -246,12 +329,20 @@ impl Bridge {
     }
 
     fn serve(self: Arc<Self>, id: u64, stream: TcpStream) {
-        let (port, token) = (self.port, self.token.clone());
+        let port = self.port;
+        let tokens = self.tokens.lock().map(|t| t.clone()).unwrap_or_default();
+        let matched = Arc::new(Mutex::new(None::<CallerIdentity>));
+        let matched_for_check = matched.clone();
         let check = move |request: &tungstenite::handshake::server::Request,
                           response: tungstenite::handshake::server::Response| {
             let header = |name: &str| request.headers().get(name).and_then(|v| v.to_str().ok());
-            match authorize(request.uri().path(), header("host"), header("origin"), &token, port) {
-                Ok(()) => Ok(response),
+            match authorize_any(request.uri().path(), header("host"), header("origin"), &tokens, port) {
+                Ok(identity) => {
+                    if let Ok(mut slot) = matched_for_check.lock() {
+                        *slot = Some(identity);
+                    }
+                    Ok(response)
+                }
                 Err(reason) => {
                     let mut refusal = tungstenite::handshake::server::ErrorResponse::new(Some(reason.into()));
                     *refusal.status_mut() = tungstenite::http::StatusCode::FORBIDDEN;
@@ -270,6 +361,11 @@ impl Bridge {
                 return;
             }
             clients.insert(id, tx);
+        }
+        if let Some(identity) = matched.lock().ok().and_then(|mut m| m.take()) {
+            if let Ok(mut ids) = self.identities.lock() {
+                ids.insert(id, identity);
+            }
         }
         let outs = self.router.lock().map(|mut r| r.connect(id)).unwrap_or_default();
         self.dispatch(outs);
@@ -307,6 +403,12 @@ impl Bridge {
         if let Ok(mut clients) = self.clients.lock() {
             clients.remove(&id);
         }
+        if let Ok(mut ids) = self.identities.lock() {
+            ids.remove(&id);
+        }
+        if let Ok(mut throttle) = self.activity_throttle.lock() {
+            throttle.retain(|(c, _), _| *c != id);
+        }
         let outs = self.router.lock().map(|mut r| r.disconnect(id)).unwrap_or_default();
         self.dispatch(outs);
     }
@@ -320,10 +422,17 @@ fn token() -> Result<String, String> {
     Ok(bytes.iter().map(|b| format!("{b:02x}")).collect())
 }
 
-/// The token gate. Browsers always send Origin on WebSocket upgrades, so any
-/// Origin is refused (a web page can never connect); Host must be loopback on
-/// our port (no DNS rebinding); the path must carry the per-launch token.
-pub fn authorize(path: &str, host: Option<&str>, origin: Option<&str>, token: &str, port: u16) -> Result<(), &'static str> {
+fn token_equal(given: &str, expected: &str) -> bool {
+    given.len() == expected.len()
+        && given.bytes().zip(expected.bytes()).fold(0u8, |acc, (a, b)| acc | (a ^ b)) == 0
+}
+
+fn check_handshake_headers<'a>(
+    path: &'a str,
+    host: Option<&str>,
+    origin: Option<&str>,
+    port: u16,
+) -> Result<&'a str, &'static str> {
     if origin.is_some() {
         return Err("browser origins may not connect");
     }
@@ -331,13 +440,36 @@ pub fn authorize(path: &str, host: Option<&str>, origin: Option<&str>, token: &s
     if host != format!("127.0.0.1:{port}") && host != format!("localhost:{port}") {
         return Err("Host must be this loopback endpoint");
     }
-    let given = path.strip_prefix("/devtools/browser/").ok_or("unknown path")?;
-    let equal = given.len() == token.len()
-        && given.bytes().zip(token.bytes()).fold(0u8, |acc, (a, b)| acc | (a ^ b)) == 0;
-    if !equal {
+    path.strip_prefix("/devtools/browser/").ok_or("unknown path")
+}
+
+/// The token gate. Browsers always send Origin on WebSocket upgrades, so any
+/// Origin is refused (a web page can never connect); Host must be loopback on
+/// our port (no DNS rebinding); the path must carry a per-launch token.
+#[cfg(test)]
+pub fn authorize(path: &str, host: Option<&str>, origin: Option<&str>, token: &str, port: u16) -> Result<(), &'static str> {
+    let given = check_handshake_headers(path, host, origin, port)?;
+    if !token_equal(given, token) {
         return Err("invalid token");
     }
     Ok(())
+}
+
+pub fn authorize_any(
+    path: &str,
+    host: Option<&str>,
+    origin: Option<&str>,
+    tokens: &HashMap<String, CallerIdentity>,
+    port: u16,
+) -> Result<CallerIdentity, &'static str> {
+    let given = check_handshake_headers(path, host, origin, port)?;
+    let mut found = None;
+    for (tok, identity) in tokens {
+        if token_equal(given, tok) {
+            found = Some(identity.clone());
+        }
+    }
+    found.ok_or("invalid token")
 }
 
 #[derive(Debug, PartialEq)]
@@ -346,8 +478,8 @@ pub enum Out {
     Client(u64, Value),
     /// Open a visible agent pane for Target.createTarget, then answer `id`.
     Open { client: u64, id: Value, url: String },
-    /// Move the visible agent cursor overlay on `target` for a CDP mouse event.
-    Pointer { target: String, client: u64, x: f64, y: f64, action: PointerAction },
+    /// Move or refresh the visible agent cursor overlay on `target` for a CDP page action.
+    Pointer { target: String, client: u64, pos: Option<(f64, f64)>, action: PointerAction },
     Close(u64),
 }
 
@@ -598,24 +730,52 @@ impl Router {
     }
 
     fn pointer_event(&self, client: u64, session: &str, method: &str, params: &Value) -> Option<Out> {
-        if method != "Input.dispatchMouseEvent" {
-            return None;
-        }
-        let action = match params["type"].as_str()? {
-            "mouseMoved" => PointerAction::Move,
-            "mousePressed" => PointerAction::Tap,
-            "mouseWheel" => PointerAction::Scroll,
+        let (pos, action) = match method {
+            "Input.dispatchMouseEvent" => {
+                let action = match params["type"].as_str()? {
+                    "mouseMoved" => PointerAction::Move,
+                    "mousePressed" => PointerAction::Tap,
+                    "mouseWheel" => PointerAction::Scroll,
+                    _ => return None,
+                };
+                let x = params["x"].as_f64().filter(|n| n.is_finite())?;
+                let y = params["y"].as_f64().filter(|n| n.is_finite())?;
+                (Some((x, y)), action)
+            }
+            "Input.dispatchTouchEvent" => {
+                let action = match params["type"].as_str()? {
+                    "touchStart" => PointerAction::Tap,
+                    "touchMove" => PointerAction::Move,
+                    _ => return None,
+                };
+                let pt = params["touchPoints"].get(0)?;
+                let x = pt["x"].as_f64().filter(|n| n.is_finite())?;
+                let y = pt["y"].as_f64().filter(|n| n.is_finite())?;
+                (Some((x, y)), action)
+            }
+            "Input.dispatchKeyEvent" => {
+                if !matches!(params["type"].as_str(), Some("keyDown" | "rawKeyDown" | "char")) {
+                    return None;
+                }
+                (None, PointerAction::Activity)
+            }
+            "Input.insertText"
+            | "Page.navigate"
+            | "Page.reload"
+            | "Page.captureScreenshot"
+            | "DOM.focus"
+            | "DOM.scrollIntoViewIfNeeded"
+            | "Runtime.evaluate"
+            | "Runtime.callFunctionOn" => (None, PointerAction::Activity),
             _ => return None,
         };
-        let x = params["x"].as_f64().filter(|n| n.is_finite())?;
-        let y = params["y"].as_f64().filter(|n| n.is_finite())?;
         let mut page_session = session;
         for _ in 0..32 {
             let Some(parent) = self.parent.get(page_session) else { break };
             page_session = parent;
         }
         let target = self.targets.get(page_session)?.clone();
-        Some(Out::Pointer { target, client, x, y, action })
+        Some(Out::Pointer { target, client, pos, action })
     }
 
     fn owns_detach(&self, client: u64, params: &Value) -> bool {
@@ -1086,7 +1246,10 @@ mod tests {
         let mut r = attached_page();
         for (i, (method, params)) in flow.iter().enumerate() {
             let out = r.from_client(1, json!({"id": i, "method": method, "params": params, "sessionId": "A1"}));
-            assert!(matches!(&out[..], [Out::Browser(m)] if m["method"] == *method && m["sessionId"] == "A1"), "{method}: {out:?}");
+            assert!(
+                matches!(&out[..], [Out::Browser(m)] | [Out::Browser(m), Out::Pointer { .. }] if m["method"] == *method && m["sessionId"] == "A1"),
+                "{method}: {out:?}"
+            );
         }
         // Frame sessions run the same flow, scoped to their own target.
         let frame = r.from_client(1, json!({"id": 90, "method": "Runtime.evaluate", "sessionId": "F1"}));
@@ -1224,14 +1387,14 @@ mod tests {
             "params": {"type": "mouseMoved", "x": 120.5, "y": 48.0}
         }));
         assert_eq!(moved.len(), 2);
-        assert_eq!(moved[1], Out::Pointer { target: "TA".into(), client: 1, x: 120.5, y: 48.0, action: PointerAction::Move });
+        assert_eq!(moved[1], Out::Pointer { target: "TA".into(), client: 1, pos: Some((120.5, 48.0)), action: PointerAction::Move });
 
         let pressed = r.from_client(1, json!({
             "id": 2, "method": "Input.dispatchMouseEvent", "sessionId": "A1",
             "params": {"type": "mousePressed", "x": 120.5, "y": 48.0, "button": "left", "clickCount": 1}
         }));
         assert_eq!(pressed.len(), 2);
-        assert_eq!(pressed[1], Out::Pointer { target: "TA".into(), client: 1, x: 120.5, y: 48.0, action: PointerAction::Tap });
+        assert_eq!(pressed[1], Out::Pointer { target: "TA".into(), client: 1, pos: Some((120.5, 48.0)), action: PointerAction::Tap });
 
         // mouseReleased does not emit a duplicate pointer move.
         let released = r.from_client(1, json!({
@@ -1246,7 +1409,7 @@ mod tests {
             "params": {"type": "mouseWheel", "x": 200, "y": 300, "deltaX": 0, "deltaY": 120}
         }));
         assert_eq!(wheel.len(), 2);
-        assert_eq!(wheel[1], Out::Pointer { target: "TA".into(), client: 1, x: 200.0, y: 300.0, action: PointerAction::Scroll });
+        assert_eq!(wheel[1], Out::Pointer { target: "TA".into(), client: 1, pos: Some((200.0, 300.0)), action: PointerAction::Scroll });
 
         // Missing or non-numeric coordinates do not emit a pointer update.
         let bad = r.from_client(1, json!({
@@ -1254,6 +1417,50 @@ mod tests {
             "params": {"type": "mouseMoved", "x": "oops", "y": 10}
         }));
         assert_eq!(bad.len(), 1);
+
+        // Non-mouse page actions (typing, fill, navigate, eval) emit Activity pointer refreshes.
+        let typed = r.from_client(1, json!({
+            "id": 6, "method": "Input.insertText", "sessionId": "A1",
+            "params": {"text": "hello"}
+        }));
+        assert_eq!(typed.len(), 2);
+        assert_eq!(typed[1], Out::Pointer { target: "TA".into(), client: 1, pos: None, action: PointerAction::Activity });
+
+        let key_up = r.from_client(1, json!({
+            "id": 7, "method": "Input.dispatchKeyEvent", "sessionId": "A1",
+            "params": {"type": "keyUp", "key": "a"}
+        }));
+        assert_eq!(key_up.len(), 1);
+
+        let nav = r.from_client(1, json!({
+            "id": 8, "method": "Page.navigate", "sessionId": "A1",
+            "params": {"url": "https://example.com"}
+        }));
+        assert_eq!(nav.len(), 2);
+        assert_eq!(nav[1], Out::Pointer { target: "TA".into(), client: 1, pos: None, action: PointerAction::Activity });
+    }
+
+    #[test]
+    fn authorize_any_resolves_per_caller_identity_and_refuses_bad_tokens() {
+        let mut tokens = HashMap::new();
+        tokens.insert("tok-alpha".into(), CallerIdentity { key: "t1a".into(), label: Some("claude".into()) });
+        tokens.insert("tok-beta".into(), CallerIdentity { key: "t2b".into(), label: Some("codex".into()) });
+        assert_eq!(
+            authorize_any("/devtools/browser/tok-alpha", Some("127.0.0.1:9333"), None, &tokens, 9333),
+            Ok(CallerIdentity { key: "t1a".into(), label: Some("claude".into()) })
+        );
+        assert_eq!(
+            authorize_any("/devtools/browser/tok-beta", Some("localhost:9333"), None, &tokens, 9333),
+            Ok(CallerIdentity { key: "t2b".into(), label: Some("codex".into()) })
+        );
+        assert_eq!(
+            authorize_any("/devtools/browser/tok-other", Some("127.0.0.1:9333"), None, &tokens, 9333),
+            Err("invalid token")
+        );
+        assert_eq!(
+            authorize_any("/devtools/browser/tok-alpha", Some("127.0.0.1:9333"), Some("https://evil.example"), &tokens, 9333),
+            Err("browser origins may not connect")
+        );
     }
 
     #[test]

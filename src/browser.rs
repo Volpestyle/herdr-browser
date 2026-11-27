@@ -51,6 +51,22 @@ pub enum PointerAction {
     Move,
     /// Scroll gesture (`browser.scroll` or CDP `mouseWheel`): glide to scroll point, no click ripple.
     Scroll,
+    /// Non-pointer agent activity (eval, navigate, snapshot, read, press, screenshot, CDP fill/type).
+    Activity,
+}
+
+/// Visual pointer and target-element update for an agent driving a browser pane.
+#[derive(Clone, Copy, Debug)]
+pub struct PointerUpdate<'a> {
+    /// Stable per-agent key used to pick a persistent color slot.
+    pub caller: Option<&'a str>,
+    /// Short human-readable label rendered in the colored pill next to the cursor.
+    pub label: Option<&'a str>,
+    /// Optional CSS viewport position; `None` keeps the agent's last position (or a default parked spot).
+    pub pos: Option<(f64, f64)>,
+    /// Optional CSS viewport bounding box `[x, y, width, height]` of the targeted element to outline.
+    pub rect: Option<[f64; 4]>,
+    pub action: PointerAction,
 }
 
 /// Whether followed links open here: settings.json `links: "system"` sends them to the default browser.
@@ -604,7 +620,9 @@ impl Browser {
                     self.run_find(true, false);
                 }
                 #[cfg(target_os = "macos")]
-                if self.host.as_ref().is_some_and(|h| !h.has_page_target()) {
+                if self.profile == "agent"
+                    && (url_changed || self.host.as_ref().is_some_and(|h| !h.has_page_target()))
+                {
                     self.sync_target_id(cx);
                 }
                 if url_changed {
@@ -780,6 +798,15 @@ impl Browser {
         if let Some(host) = &self.host {
             host.focus();
         }
+    }
+
+    pub fn note_agent_activity(&self, caller: Option<&str>, label: Option<&str>) {
+        #[cfg(target_os = "macos")]
+        if let Some(host) = &self.host {
+            host.note_agent_activity(caller, label);
+        }
+        #[cfg(not(target_os = "macos"))]
+        let _ = (caller, label);
     }
 
     /// Hand AppKit's keyboard back to the window if this page holds it, so a

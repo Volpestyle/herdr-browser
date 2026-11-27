@@ -592,7 +592,7 @@ export default class Settings extends View {
       .child((() => {
         const steps = [5, 10, 15, 30, 60, 0];
         const raw = this.person.agent_cursor_idle_secs;
-        const idle = typeof raw === "number" && Number.isFinite(raw) && raw >= 0 ? raw : 5;
+        const idle = typeof raw === "number" && Number.isFinite(raw) && raw >= 0 ? raw : 30;
         const label = idle === 0 ? "Always" : `${Math.round(idle)}s`;
         const stepIdle = (dir) => (_e, cx) => this.change((p) => {
           const idx = steps.indexOf(idle);
@@ -604,13 +604,13 @@ export default class Settings extends View {
           } else {
             next = [...steps].reverse().find((v) => v > 0 && v < idle) ?? 5;
           }
-          if (next === 5) delete p.agent_cursor_idle_secs;
+          if (next === 30) delete p.agent_cursor_idle_secs;
           else p.agent_cursor_idle_secs = next;
         }, cx);
         return this.row(
           t,
           "Keep cursor visible",
-          "How long an agent's cursor stays on screen after moving or clicking. Always keeps it visible until the pane closes.",
+          "How long an agent's cursor stays on screen after moving, clicking, or acting on a page (default 30s). Always keeps it visible until the pane closes.",
           this.stepper(t, "st-agent-cursor-idle", label, stepIdle(-1), stepIdle(1)),
         );
       })());
