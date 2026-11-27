@@ -465,6 +465,187 @@ wrap_find_handler! {
         }
     }
 }
+
+fn normalize_media_origin(raw: &str) -> Option<String> {
+    let trimmed = raw.trim().trim_end_matches('/');
+    let rest = if let Some(rest) = trimmed.strip_prefix("https://") {
+        let authority = rest.split('/').next()?;
+        if authority.is_empty() || authority.contains('@') {
+            return None;
+        }
+        return Some(format!("https://{}", authority.to_ascii_lowercase()));
+    } else if let Some(rest) = trimmed.strip_prefix("http://") {
+        rest
+    } else {
+        return None;
+    };
+    let authority = rest.split('/').next()?;
+    let host = if authority.starts_with('[') {
+        authority.split(']').next()?.trim_start_matches('[')
+    } else {
+        authority.split(':').next()?
+    };
+    if matches!(host.to_ascii_lowercase().as_str(), "localhost" | "127.0.0.1" | "::1") {
+        Some(format!("http://{}", authority.to_ascii_lowercase()))
+    } else {
+        None
+    }
+}
+
+fn media_permission_kind(audio: bool, video: bool) -> Option<(&'static str, &'static str)> {
+    match (audio, video) {
+        (true, true) => Some(("camera_and_microphone", "camera and microphone")),
+        (true, false) => Some(("microphone", "microphone")),
+        (false, true) => Some(("camera", "camera")),
+        (false, false) => None,
+    }
+}
+
+fn media_permissions_path() -> std::path::PathBuf {
+    crate::mods::app_dir().join("media-permissions.json")
+}
+
+fn load_media_permissions(path: &std::path::Path) -> HashMap<String, bool> {
+    std::fs::read_to_string(path)
+        .ok()
+        .and_then(|text| serde_json::from_str::<HashMap<String, bool>>(&text).ok())
+        .unwrap_or_default()
+}
+
+fn save_media_permissions(path: &std::path::Path, map: &HashMap<String, bool>) {
+    if let Some(parent) = path.parent() {
+        let _ = std::fs::create_dir_all(parent);
+    }
+    if let Ok(bytes) = serde_json::to_vec_pretty(map) {
+        let _ = std::fs::write(path, bytes);
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let _ = std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o600));
+        }
+    }
+}
+
+fn prompt_media_permission_macos(origin: &str, label: &str) -> bool {
+    autoreleasepool(|_| unsafe {
+        let alert: Retained<AnyObject> = msg_send![class!(NSAlert), new];
+        let title = NSString::from_str(&format!("Allow {origin} to use your {label}?"));
+        let info = NSString::from_str("Herdr Browser will remember this choice for this site.");
+        let allow = NSString::from_str("Allow");
+        let deny = NSString::from_str("Don't Allow");
+        let _: () = msg_send![&*alert, setMessageText: &*title];
+        let _: () = msg_send![&*alert, setInformativeText: &*info];
+        let _: *mut AnyObject = msg_send![&*alert, addButtonWithTitle: &*allow];
+        let _: *mut AnyObject = msg_send![&*alert, addButtonWithTitle: &*deny];
+        let response: isize = msg_send![&*alert, runModal];
+        response == 1000
+    })
+}
+
+fn decide_media_permission_with<F>(
+    ask: bool,
+    raw_origin: &str,
+    audio: bool,
+    video: bool,
+    store_path: &std::path::Path,
+    prompt: F,
+) -> bool
+where
+    F: FnOnce(&str, &str) -> bool,
+{
+    if !ask {
+        return false;
+    }
+    let Some((kind_key, label)) = media_permission_kind(audio, video) else {
+        return false;
+    };
+    let Some(origin) = normalize_media_origin(raw_origin) else {
+        return false;
+    };
+    let key = format!("{origin}|{kind_key}");
+    let mut map = load_media_permissions(store_path);
+    if let Some(&saved) = map.get(&key) {
+        return saved;
+    }
+    let allowed = prompt(&origin, label);
+    map.insert(key, allowed);
+    save_media_permissions(store_path, &map);
+    allowed
+}
+
+wrap_permission_handler! {
+    struct Permissions { ask: bool }
+    impl PermissionHandler {
+        fn on_request_media_access_permission(
+            &self,
+            _browser: Option<&mut Browser>,
+            _frame: Option<&mut Frame>,
+            requesting_origin: Option<&CefString>,
+            requested_permissions: u32,
+            callback: Option<&mut MediaAccessCallback>,
+        ) -> i32 {
+            let audio_bit = MediaAccessPermissionTypes::DEVICE_AUDIO_CAPTURE.get_raw();
+            let video_bit = MediaAccessPermissionTypes::DEVICE_VIDEO_CAPTURE.get_raw();
+            let device_mask = audio_bit | video_bit;
+            let requested_device = requested_permissions & device_mask;
+            if requested_device == 0 {
+                return 0;
+            }
+            let origin = requesting_origin.map(CefString::to_string).unwrap_or_default();
+            let allowed = decide_media_permission_with(
+                self.ask,
+                &origin,
+                (requested_device & audio_bit) != 0,
+                (requested_device & video_bit) != 0,
+                &media_permissions_path(),
+                prompt_media_permission_macos,
+            );
+            if let Some(callback) = callback {
+                if allowed {
+                    callback.cont(requested_device);
+                } else {
+                    callback.cancel();
+                }
+            }
+            1
+        }
+
+        fn on_show_permission_prompt(
+            &self,
+            _browser: Option<&mut Browser>,
+            _prompt_id: u64,
+            requesting_origin: Option<&CefString>,
+            requested_permissions: u32,
+            callback: Option<&mut PermissionPromptCallback>,
+        ) -> i32 {
+            let mic_bit = PermissionRequestTypes::MIC_STREAM.get_raw();
+            let cam_bit = PermissionRequestTypes::CAMERA_STREAM.get_raw();
+            let media_mask = mic_bit | cam_bit;
+            let requested_media = requested_permissions & media_mask;
+            if requested_media == 0 {
+                return 0;
+            }
+            let origin = requesting_origin.map(CefString::to_string).unwrap_or_default();
+            let allowed = decide_media_permission_with(
+                self.ask,
+                &origin,
+                (requested_media & mic_bit) != 0,
+                (requested_media & cam_bit) != 0,
+                &media_permissions_path(),
+                prompt_media_permission_macos,
+            );
+            if let Some(callback) = callback {
+                callback.cont(if allowed {
+                    PermissionRequestResult::ACCEPT
+                } else {
+                    PermissionRequestResult::DENY
+                });
+            }
+            1
+        }
+    }
+}
+
 wrap_client! {
     struct PageClient { tx: Tx, ask: bool, gate: Arc<AtomicBool>, browser: std::rc::Weak<RefCell<Option<Browser>>>, closing: Rc<Cell<bool>>, pending: Rc<Cell<bool>>, container: Retained<NSView> }
     impl Client {
@@ -476,6 +657,7 @@ wrap_client! {
         fn keyboard_handler(&self) -> Option<KeyboardHandler> { Some(Keys::new()) }
         fn download_handler(&self) -> Option<DownloadHandler> { Some(Download::new(Some(self.tx.clone()), self.ask)) }
         fn find_handler(&self) -> Option<FindHandler> { Some(Find::new(self.tx.clone())) }
+        fn permission_handler(&self) -> Option<PermissionHandler> { Some(Permissions::new(self.ask)) }
     }
 }
 struct CursorLayers {
@@ -2074,5 +2256,58 @@ mod tests {
         assert_eq!(keys["global"]["cmd-ctrl-["]["args"]["by"].as_i64(), Some(-1));
         assert_eq!(keys["global"]["cmd-ctrl-]"]["command"].as_str(), Some("tab.move"));
         assert_eq!(keys["global"]["cmd-ctrl-]"]["args"]["by"].as_i64(), Some(1));
+    }
+    #[test]
+    fn media_permission_policy_denies_agent_and_persists_person_choices() {
+        use super::{decide_media_permission_with, normalize_media_origin};
+        assert_eq!(
+            normalize_media_origin("https://JCVOLPE.ME/admin"),
+            Some("https://jcvolpe.me".into())
+        );
+        assert_eq!(
+            normalize_media_origin("http://127.0.0.1:3000/"),
+            Some("http://127.0.0.1:3000".into())
+        );
+        assert_eq!(normalize_media_origin("http://example.com/"), None);
+        assert_eq!(normalize_media_origin("file:///tmp/test.html"), None);
+
+        let dir = std::env::temp_dir().join(format!("hb-media-perm-{}", std::process::id()));
+        let store = dir.join("media-permissions.json");
+        let _ = std::fs::remove_dir_all(&dir);
+
+        assert!(!decide_media_permission_with(
+            false,
+            "https://jcvolpe.me/",
+            true,
+            false,
+            &store,
+            |_, _| panic!("agent panes must never prompt")
+        ));
+
+        let mut prompts = 0;
+        assert!(decide_media_permission_with(
+            true,
+            "https://jcvolpe.me/",
+            true,
+            false,
+            &store,
+            |origin, label| {
+                prompts += 1;
+                assert_eq!(origin, "https://jcvolpe.me");
+                assert_eq!(label, "microphone");
+                true
+            }
+        ));
+        assert!(decide_media_permission_with(
+            true,
+            "https://jcvolpe.me/admin",
+            true,
+            false,
+            &store,
+            |_, _| panic!("persisted allow should not re-prompt")
+        ));
+        assert_eq!(prompts, 1);
+
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }
