@@ -111,6 +111,11 @@ wrap_app! {
             let (true, Some(line)) = (browser, command_line) else { return };
             // Without this, Chrome style shows its own sign-in prompt and never asks the pane.
             line.append_switch(Some(&"disable-chrome-login-prompt".into()));
+            // Test runs re-sign ad-hoc preview bundles; keep them off the real Login Keychain
+            // so macOS never blocks headless runs with a Keychain password prompt.
+            if std::env::var_os("HERDR_BROWSER_TEST_KEYCHAIN").is_some() {
+                line.append_switch(Some(&"use-mock-keychain".into()));
+            }
             if super::cdp::reserved() {
                 line.append_switch(Some(&"remote-debugging-pipe".into()));
                 // The pipe alone makes every page report navigator.webdriver, so

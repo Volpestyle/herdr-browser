@@ -3,8 +3,8 @@ use super::{Event, PointerAction, PointerUpdate, runtime};
 use cef::*;
 use gpui::{Bounds, Pixels, Window as GpuiWindow};
 use objc2::{
-    MainThreadMarker, MainThreadOnly,
-    class, msg_send,
+    DefinedClass, Encoding, MainThreadMarker, MainThreadOnly, RefEncode,
+    class, define_class, msg_send,
     rc::{Retained, Weak as ObjcWeak, autoreleasepool},
     runtime::AnyObject,
 };
@@ -29,6 +29,147 @@ use std::{
 #[link(name = "QuartzCore", kind = "framework")]
 unsafe extern "C" {
     fn CACurrentMediaTime() -> f64;
+}
+
+#[repr(C)]
+struct CGPath {
+    _private: [u8; 0],
+}
+
+unsafe impl RefEncode for CGPath {
+    const ENCODING_REF: Encoding = Encoding::Pointer(&Encoding::Struct("CGPath", &[]));
+}
+
+#[link(name = "CoreGraphics", kind = "framework")]
+unsafe extern "C" {
+    fn CGPathCreateMutable() -> *mut CGPath;
+    fn CGPathAddRect(path: *mut CGPath, m: *const std::ffi::c_void, rect: NSRect);
+    fn CGPathAddRoundedRect(
+        path: *mut CGPath,
+        m: *const std::ffi::c_void,
+        rect: NSRect,
+        corner_width: f64,
+        corner_height: f64,
+    );
+    fn CGPathRelease(path: *const CGPath);
+}
+
+struct ContainerIvars {
+    /// Active toast cutout rects in container-local bottom-left coordinates `[x, y, w, h]`.
+    cutouts: Rc<RefCell<Vec<[f64; 4]>>>,
+}
+
+fn point_in_cutouts(point: NSPoint, cutouts: &[[f64; 4]]) -> bool {
+    cutouts.iter().any(|r| {
+        point.x >= r[0] && point.x <= r[0] + r[2] && point.y >= r[1] && point.y <= r[1] + r[3]
+    })
+}
+
+define_class!(
+    #[unsafe(super(NSView))]
+    #[thread_kind = MainThreadOnly]
+    #[ivars = ContainerIvars]
+    struct BrowserContainerView;
+
+    impl BrowserContainerView {
+        #[unsafe(method(hitTest:))]
+        fn hit_test(&self, point: NSPoint) -> *mut NSView {
+            // `point` is in the superview's coordinate system; convert to local bounds.
+            let superview = unsafe { self.superview() };
+            let local = self.convertPoint_fromView(point, superview.as_deref());
+            if point_in_cutouts(local, &self.ivars().cutouts.borrow()) {
+                return std::ptr::null_mut();
+            }
+            unsafe { msg_send![super(self), hitTest: point] }
+        }
+    }
+);
+
+impl BrowserContainerView {
+    fn new(
+        mtm: MainThreadMarker,
+        frame: NSRect,
+        cutouts: Rc<RefCell<Vec<[f64; 4]>>>,
+    ) -> Retained<Self> {
+        let this = mtm.alloc::<Self>().set_ivars(ContainerIvars { cutouts });
+        unsafe { msg_send![super(this), initWithFrame: frame] }
+    }
+}
+
+/// Convert window-space cutout rects (top-left origin) into container-local AppKit rects (bottom-left origin)
+/// with per-cutout corner radii. Only `toast == true` cutouts contribute to the reported toast `cut` height.
+fn local_toast_cutouts(
+    bounds: [f64; 4],
+    clear: &[([f64; 4], f64, bool)],
+) -> (Vec<([f64; 4], f64)>, f64) {
+    let mut out = Vec::new();
+    let mut max_cut = 0.0_f64;
+    let bx = bounds[0];
+    let by = bounds[1];
+    let bw = bounds[2];
+    let bh = bounds[3];
+    if bw < 1. || bh < 1. {
+        return (out, 0.0);
+    }
+    for &(c, radius, is_toast) in clear {
+        let x0 = (c[0] - bx).max(0.0);
+        let y0 = (c[1] - by).max(0.0);
+        let x1 = (c[0] + c[2] - bx).min(bw);
+        let y1 = (c[1] + c[3] - by).min(bh);
+        if x1 > x0 + 0.5 && y1 > y0 + 0.5 {
+            // Preserve the unclamped overlay box so rounded corners (e.g. a
+            // bottom-straddling update pill) match GPUI's exact corner arc.
+            let lx = c[0] - bx;
+            let ly = bh - (c[1] + c[3] - by);
+            out.push(([lx, ly, c[2], c[3]], radius));
+            if is_toast {
+                max_cut = max_cut.max((bh - y0).clamp(0.0, bh));
+            }
+        }
+    }
+    (out, max_cut)
+}
+
+unsafe fn apply_cutout_mask(
+    container: &NSView,
+    width: f64,
+    height: f64,
+    cutouts: &[([f64; 4], f64)],
+) {
+    container.setWantsLayer(true);
+    let root: *mut AnyObject = msg_send![container, layer];
+    if root.is_null() {
+        return;
+    }
+    let _: () = msg_send![class!(CATransaction), begin];
+    let _: () = msg_send![class!(CATransaction), setDisableActions: true];
+    if cutouts.is_empty() {
+        let _: () = msg_send![root, setMask: std::ptr::null::<AnyObject>()];
+    } else {
+        let path = unsafe { CGPathCreateMutable() };
+        unsafe {
+            CGPathAddRect(
+                path,
+                std::ptr::null(),
+                NSRect::new(NSPoint::new(0., 0.), NSSize::new(width, height)),
+            );
+            for &(c, corner_radius) in cutouts {
+                let r = corner_radius.min(c[2] / 2.0).min(c[3] / 2.0).max(0.0);
+                let rect = NSRect::new(NSPoint::new(c[0], c[1]), NSSize::new(c[2], c[3]));
+                if r >= 0.5 {
+                    CGPathAddRoundedRect(path, std::ptr::null(), rect, r, r);
+                } else {
+                    CGPathAddRect(path, std::ptr::null(), rect);
+                }
+            }
+        }
+        let mask: Retained<AnyObject> = msg_send![class!(CAShapeLayer), layer];
+        let _: () = msg_send![&*mask, setFillRule: &*NSString::from_str("even-odd")];
+        let _: () = msg_send![&*mask, setPath: path];
+        let _: () = msg_send![root, setMask: &*mask];
+        unsafe { CGPathRelease(path) };
+    }
+    let _: () = msg_send![class!(CATransaction), commit];
 }
 
 type Tx = async_channel::Sender<Event>;
@@ -391,6 +532,8 @@ pub struct Host {
     find_open: Rc<Cell<bool>>,
     bounds: Cell<Option<[f64; 4]>>,
     cut: Cell<f64>,
+    cutouts: Rc<RefCell<Vec<[f64; 4]>>>,
+    mask_state: RefCell<Option<(f64, f64, Vec<([f64; 4], f64)>)>>,
     focus_pending: Cell<bool>,
     focus_gate: Arc<AtomicBool>,
     monitor: Option<Retained<AnyObject>>,
@@ -1238,13 +1381,15 @@ impl Host {
             parent.bounds().size.width.max(1.),
             (parent.bounds().size.height - 44.).max(1.),
         );
-        let container = NSView::initWithFrame(
-            NSView::alloc(mtm),
+        let cutouts = Rc::new(RefCell::new(Vec::new()));
+        let container_view = BrowserContainerView::new(
+            mtm,
             NSRect::new(NSPoint::new(0., 0.), initial),
+            cutouts.clone(),
         );
+        let container: Retained<NSView> = Retained::into_super(container_view);
         container.setWantsLayer(true);
         container.setHidden(true);
-        // place() shortens the container over a taller page to keep toasts visible.
         container.setClipsToBounds(true);
         parent.addSubview(&container);
         let info = WindowInfo {
@@ -1315,6 +1460,7 @@ impl Host {
         let event_allowed = allowed.clone();
         let event_find_open = find_open.clone();
         let event_container = container.clone();
+        let event_cutouts = cutouts.clone();
         let event_parent = parent.clone();
         let event_window = native_window.clone();
         let block = block2::RcBlock::new(move |event: NonNull<NSEvent>| {
@@ -1337,7 +1483,8 @@ impl Host {
             if e.r#type() == objc2_app_kit::NSEventType::LeftMouseDown {
                 let p = event_container.convertPoint_fromView(e.locationInWindow(), None);
                 let b = event_container.bounds();
-                if p.x >= 0. && p.y >= 0. && p.x < b.size.width && p.y < b.size.height {
+                let in_cutout = point_in_cutouts(p, &event_cutouts.borrow());
+                if !in_cutout && p.x >= 0. && p.y >= 0. && p.x < b.size.width && p.y < b.size.height {
                     let _ = tx.try_send(Event::Focused);
                 } else if focused(&event_container, &event_window) {
                     // GPUI inputs update their own focus handle on a click, but
@@ -1469,6 +1616,8 @@ impl Host {
             find_open,
             bounds: Cell::new(None),
             cut: Cell::new(0.),
+            cutouts,
+            mask_state: RefCell::new(None),
             focus_pending: Cell::new(true),
             focus_gate,
             monitor,
@@ -1542,24 +1691,39 @@ impl Host {
             self.container.setHidden(true);
         }
     }
-    pub fn place(&self, bounds: Bounds<Pixels>, allowed: bool, clear: Option<Bounds<Pixels>>) {
+    pub fn place(&self, bounds: Bounds<Pixels>, allowed: bool, clear: &[super::ClearCutout]) {
         let rect = [
             f64::from(f32::from(bounds.origin.x)),
             f64::from(f32::from(bounds.origin.y)),
             f64::from(f32::from(bounds.size.width)),
             f64::from(f32::from(bounds.size.height)),
         ];
-        // The page keeps its size and loses its bottom rows to `clear`, so it
-        // neither reflows nor blanks while a toast is up.
-        let cut = clear.filter(|c| c.intersects(&bounds)).map_or(0., |c| f64::from(f32::from(bounds.bottom() - c.top())));
-        if !allowed || rect[2] < 1. || rect[3] - cut < 1. {
+        if !allowed || rect[2] < 1. || rect[3] < 1. {
             self.set_allowed(false);
             return;
         }
+        let clear_rects: Vec<([f64; 4], f64, bool)> = clear
+            .iter()
+            .map(|c| {
+                (
+                    [
+                        f64::from(f32::from(c.bounds.origin.x)),
+                        f64::from(f32::from(c.bounds.origin.y)),
+                        f64::from(f32::from(c.bounds.size.width)),
+                        f64::from(f32::from(c.bounds.size.height)),
+                    ],
+                    f64::from(f32::from(c.radius)),
+                    c.toast,
+                )
+            })
+            .collect();
+        let (local_cutouts, cut) = local_toast_cutouts(rect, &clear_rects);
+        // Keep the container at the full browser pane size and punch out only
+        // the exact rounded toast/pill card rect(s) so the rest of the bottom strip stays rendered.
         let y = if self.parent.isFlipped() {
             rect[1]
         } else {
-            self.parent.bounds().size.height - rect[1] - rect[3] + cut
+            self.parent.bounds().size.height - rect[1] - rect[3]
         };
         let view = self.native_view();
         if let Some(view) = view {
@@ -1567,11 +1731,12 @@ impl Host {
         }
         self.container.setFrame(NSRect::new(
             NSPoint::new(rect[0], y),
-            NSSize::new(rect[2], rect[3] - cut),
+            NSSize::new(rect[2], rect[3]),
         ));
         self.cut.set(cut);
+        *self.cutouts.borrow_mut() = local_cutouts.iter().map(|(r, _)| *r).collect();
         if let Some(view) = view {
-            view.setFrame(NSRect::new(NSPoint::new(0., -cut), NSSize::new(rect[2], rect[3])));
+            view.setFrame(NSRect::new(NSPoint::new(0., 0.), NSSize::new(rect[2], rect[3])));
             view.setAutoresizingMask(
                 NSAutoresizingMaskOptions::ViewWidthSizable
                     | NSAutoresizingMaskOptions::ViewHeightSizable,
@@ -1582,6 +1747,14 @@ impl Host {
         let became_shown = !self.shown.replace(true);
         if became_shown {
             self.container.setHidden(false);
+        }
+        let next_mask = (rect[2], rect[3], local_cutouts);
+        let mask_changed = self.mask_state.borrow().as_ref() != Some(&next_mask);
+        if mask_changed || became_shown {
+            unsafe {
+                apply_cutout_mask(&self.container, rect[2], rect[3], &next_mask.2);
+            }
+            *self.mask_state.borrow_mut() = Some(next_mask);
         }
         let resized = prev_bounds.is_none_or(|p| (p[2] - rect[2]).abs() > 0.5 || (p[3] - rect[3]).abs() > 0.5);
         let has_pending = self.layers.borrow().values().any(|s| s.layers.is_none());
@@ -1719,9 +1892,29 @@ mod tests {
         AGENT_COLORS, CursorPrefs, CursorStyle, DEFAULT_AGENT_CURSOR_IDLE_SECS,
         MAX_AGENT_CURSOR_IDLE_SECS, NEUTRAL_CURSOR_COLOR, agent_badge_svg, agent_color,
         agent_highlight_svg, agent_ripple_svg, badge_origin, ctrl_cmd_shortcut, ctrl_shortcut,
-        download_url, normalize_cursor_label, parse_cursor_prefs, record_cursor_svg_for_prefs,
-        resolve_cursor_appearance, shortcut, subframe_url,
+        download_url, local_toast_cutouts, normalize_cursor_label, parse_cursor_prefs,
+        point_in_cutouts, record_cursor_svg_for_prefs, resolve_cursor_appearance, shortcut,
+        subframe_url,
     };
+    #[test]
+    fn local_toast_cutouts_punches_only_intersecting_toast_rects() {
+        // Browser pane at (200, 100), size 1000x600 (window y: 100..700).
+        // Toast at bottom-right (844, 612), size 340x72 (window x: 844..1184, y: 612..684).
+        let (cutouts, cut) = local_toast_cutouts([200., 100., 1000., 600.], &[([844., 612., 340., 72.], 8.0, true)]);
+        assert_eq!(cutouts, vec![([644., 16., 340., 72.], 8.0)]);
+        assert_eq!(cut, 88.0);
+        // Point inside toast cutout passes through; point on left bottom strip stays in browser.
+        let rects: Vec<[f64; 4]> = cutouts.iter().map(|(r, _)| *r).collect();
+        assert!(point_in_cutouts(super::NSPoint::new(700., 40.), &rects));
+        assert!(!point_in_cutouts(super::NSPoint::new(100., 40.), &rects));
+        // Update pill masks out its full unclamped stadium box without inflating toast `cut`.
+        let (pill_cutouts, pill_cut) = local_toast_cutouts([200., 100., 1000., 600.], &[([920., 675., 260., 34.], 17.0, false)]);
+        assert_eq!(pill_cutouts, vec![([720., -9., 260., 34.], 17.0)]);
+        assert_eq!(pill_cut, 0.0);
+        // Non-intersecting toast produces no cutouts.
+        let (none, cut0) = local_toast_cutouts([200., 100., 400., 600.], &[([844., 612., 340., 72.], 8.0, true)]);
+        assert!(none.is_empty() && cut0 == 0.0);
+    }
     #[test]
     fn subframe_url_blocks_external_protocols() {
         assert!(subframe_url("https://example.com/embed"));

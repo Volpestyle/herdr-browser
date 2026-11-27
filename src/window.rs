@@ -22,7 +22,7 @@ use gpui::*;
 use gpui_shell::action::ShellAction;
 use gpui_shell::{ShellRoot, ShellRuntime, Watcher};
 use serde_json::{Value, json};
-use std::cell::RefCell;
+use std::cell::{Cell, RefCell};
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 use std::path::PathBuf;
 use std::rc::Rc;
@@ -481,6 +481,7 @@ pub struct AppWindow {
     core_update_error_dismissed: Option<String>,
     update_success: bool,
     update_status: String,
+    update_pill_bounds: Rc<Cell<Option<Bounds<Pixels>>>>,
     focus: FocusHandle,
     _tasks: Vec<Task<()>>,
     /// Gives the keyboard back when what had it leaves the screen (`restore_focus`).
@@ -584,6 +585,7 @@ impl AppWindow {
             core_update_error_dismissed: None,
             update_success: false,
             update_status: String::new(),
+            update_pill_bounds: Rc::new(Cell::new(None)),
             focus: cx.focus_handle(),
             _tasks: Vec::new(),
             _focus_lost: None,
@@ -5068,16 +5070,25 @@ impl AppWindow {
         }
     }
 
-    /// The overlays, and where the toasts are: native pages stop short of them.
-    fn render_overlays(&self, viewport: Size<Pixels>, cx: &mut Context<Self>) -> (Vec<AnyElement>, Option<Bounds<Pixels>>) {
+    /// The overlays, and exact toast/pill rectangles native pages cut out so overlays float cleanly on top.
+    fn render_overlays(&self, viewport: Size<Pixels>, cx: &mut Context<Self>) -> (Vec<AnyElement>, Vec<crate::browser::ClearCutout>) {
         let mut out = Vec::new();
+        let mut toast_rects = Vec::new();
         let mut toast_y = 16.0;
         // Drawn last, so it stays clickable over an open dialog.
         let pill = self.render_update_pill(cx);
         if pill.is_some() {
             toast_y += UPDATE_PILL_HEIGHT + 8.0;
+            if let Some(bounds) = self.update_pill_bounds.get() {
+                toast_rects.push(crate::browser::ClearCutout {
+                    bounds,
+                    radius: bounds.size.height / 2.0,
+                    toast: false,
+                });
+            }
+        } else {
+            self.update_pill_bounds.set(None);
         }
-        let toast_base = toast_y;
         // Windows under dialogs, popups and toasts; each kind in the order opened
         // (a window pressed last is last: on top).
         let order = self.overlays.iter().filter(|o| o.kind == OverlayKind::Window).chain(self.overlays.iter().filter(|o| o.kind != OverlayKind::Window));
@@ -5140,6 +5151,13 @@ impl AppWindow {
                     );
                 }
                 OverlayKind::Toast => {
+                    let right = viewport.width - settings::z(16.0);
+                    let bottom = viewport.height - settings::z(toast_y);
+                    toast_rects.push(crate::browser::ClearCutout {
+                        bounds: Bounds::from_corners(point(right - w, bottom - h), point(right, bottom)),
+                        radius: settings::z(8.0),
+                        toast: true,
+                    });
                     out.push(div().absolute().right(settings::z(16.0)).bottom(settings::z(toast_y)).child(body).into_any_element());
                     toast_y += o.size.height + 8.0;
                 }
@@ -5147,6 +5165,16 @@ impl AppWindow {
         }
         let core = crate::update::core();
         if let Some(error) = core.error.filter(|error| core.managed.is_none() && self.core_update_error_dismissed.as_ref() != Some(error)) {
+            let right = viewport.width - settings::z(16.0);
+            let bottom = viewport.height - settings::z(toast_y);
+            toast_rects.push(crate::browser::ClearCutout {
+                bounds: Bounds::from_corners(
+                    point(right - settings::z(540.0), bottom - settings::z(48.0)),
+                    point(right, bottom),
+                ),
+                radius: settings::z(8.0),
+                toast: true,
+            });
             out.push(div().absolute().right(settings::z(16.0)).bottom(settings::z(toast_y))
                 .max_w(settings::z(540.0)).p(settings::z(12.0)).rounded_lg().bg(c("popover"))
                 .border_1().border_color(c("border")).text_size(settings::z(13.0)).text_color(c("foreground"))
@@ -5161,8 +5189,7 @@ impl AppWindow {
                 .into_any_element());
         }
         out.extend(pill);
-        let toasts = (toast_y > toast_base).then(|| Bounds::from_corners(point(viewport.width - settings::z(16.0 + 340.0), viewport.height - settings::z(toast_y)), point(viewport.width, viewport.height)));
-        (out, toasts)
+        (out, toast_rects)
     }
 }
 
@@ -5189,6 +5216,7 @@ impl AppWindow {
         let label = self.update_ready.clone().or_else(|| success.then(|| format!("Updated to {}", env!("CARGO_PKG_VERSION"))))?;
         let dismissal = app_version.map(|v| format!("app:{v}")).unwrap_or_else(|| label.clone());
         if self.update_dismissed.as_ref() == Some(&dismissal) { return None; }
+        let measured = self.update_pill_bounds.clone();
         let pill = div()
             .absolute()
             .right(settings::z(16.0))
@@ -5206,6 +5234,19 @@ impl AppWindow {
             .shadow_lg()
             .occlude()
             .text_size(settings::z(13.0))
+            .child(
+                canvas(
+                    move |bounds, window, _| {
+                        if measured.get() != Some(bounds) {
+                            measured.set(Some(bounds));
+                            window.refresh();
+                        }
+                    },
+                    |_, _, _, _| {},
+                )
+                .absolute()
+                .inset_0(),
+            )
             .child(div().text_color(c("foreground")).child(label.clone()))
             .when(app_ready, |pill| pill.child(
                 div()
@@ -5683,7 +5724,7 @@ impl Render for AppWindow {
         let tree = self.window_frame(tree, window, cx);
         let (overlays, toasts) = self.render_overlays(window.viewport_size(), cx);
         for copy in self.copies.values() {
-            if let Some(browser) = &copy.browser { browser.read(cx).set_clear(toasts); }
+            if let Some(browser) = &copy.browser { browser.read(cx).set_clear(toasts.clone()); }
         }
         let tracker = self.float_tracker(cx);
         let win_tracker = self.window_tracker(cx);

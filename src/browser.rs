@@ -4,7 +4,7 @@ use gpui::prelude::FluentBuilder as _;
 use gpui::*;
 use gpui_base::input::{Input, InputEvent, InputState};
 use serde_json::{Value, json};
-use std::cell::Cell;
+use std::cell::{Cell, RefCell};
 use std::rc::Rc;
 
 pub mod icons;
@@ -303,6 +303,13 @@ impl Favorites {
     }
 }
 
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct ClearCutout {
+    pub bounds: Bounds<Pixels>,
+    pub radius: Pixels,
+    pub toast: bool,
+}
+
 pub struct Browser {
     pane: String,
     profile: String,
@@ -321,7 +328,7 @@ pub struct Browser {
     auth: Option<Auth>,
     credentials: [Entity<InputState>; 2],
     allowed: Rc<Cell<bool>>,
-    clear: Rc<Cell<Option<Bounds<Pixels>>>>,
+    clear: Rc<RefCell<Vec<ClearCutout>>>,
     #[cfg(target_os = "macos")]
     host: Option<Rc<macos::Host>>,
     recording: Cell<bool>,
@@ -780,9 +787,9 @@ impl Browser {
         }
     }
 
-    /// Window area the page must leave uncovered (toasts): it draws above GPUI.
-    pub fn set_clear(&self, area: Option<Bounds<Pixels>>) {
-        self.clear.set(area);
+    /// Window areas the page masks out (floating toasts and status pills): native views draw above GPUI.
+    pub fn set_clear(&self, areas: Vec<ClearCutout>) {
+        *self.clear.borrow_mut() = areas;
     }
 
     pub fn is_focused(&self) -> bool {
@@ -1205,7 +1212,7 @@ impl Render for Browser {
                     move |bounds, _, _| {
                         #[cfg(target_os = "macos")]
                         if let Some(host) = &host {
-                            host.place(bounds, allowed.get(), clear.get());
+                            host.place(bounds, allowed.get(), &clear.borrow());
                         }
                     },
                     |_, _, _, _| {},
