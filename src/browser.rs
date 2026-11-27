@@ -26,6 +26,8 @@ pub fn is_page_command(name: &str) -> bool {
             | "browser.cdp"
             | "browser.read"
             | "browser.eval"
+            | "browser.tools"
+            | "browser.tool"
             | "browser.download"
             | "browser.click"
             | "browser.type"

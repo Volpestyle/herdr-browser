@@ -1214,6 +1214,76 @@ impl Control {
                 let page = self.version(ex).await.ok();
                 Ok(json!({"result":out,"type":result["type"],"url":page.as_ref().map(|p| p["page"]["url"].clone())}))
             }
+            "browser.tools" => {
+                let value = self
+                    .call(
+                        "Runtime.evaluate",
+                        json!({"expression":"({url:location.href,title:document.title,tools:globalThis[Symbol.for('herdr.webmcp')]?.list() ?? []})","returnByValue":true}),
+                        ex,
+                    )
+                    .await?;
+                if let Some(thrown) = value.get("exceptionDetails") {
+                    let detail = thrown["exception"]["description"]
+                        .as_str()
+                        .or(thrown["text"].as_str())
+                        .unwrap_or("unknown error");
+                    return Err(format!("WebMCP list failed: {}", detail.chars().take(1000).collect::<String>()));
+                }
+                Ok(value["result"]["value"].clone())
+            }
+            "browser.tool" => {
+                let name = args["name"]
+                    .as_str()
+                    .filter(|s| !s.is_empty())
+                    .ok_or("name is required: the WebMCP tool name to call")?;
+                let input = match args.get("input") {
+                    None | Some(Value::Null) => json!({}),
+                    Some(Value::String(s)) => serde_json::from_str::<Value>(s).unwrap_or_else(|_| Value::String(s.clone())),
+                    Some(v) => v.clone(),
+                };
+                let timeout = match args.get("timeout") {
+                    None => 15000,
+                    Some(v) => v
+                        .as_u64()
+                        .filter(|v| (1..=120000).contains(v))
+                        .ok_or("timeout must be 1..120000 milliseconds")?,
+                };
+                let expr = format!(
+                    "(() => {{ const w = globalThis[Symbol.for('herdr.webmcp')]; if (!w) throw new Error('WebMCP is not initialized on this page'); return w.call({}, {}, {}); }})()",
+                    serde_json::to_string(name).map_err(|e| e.to_string())?,
+                    serde_json::to_string(&input).map_err(|e| e.to_string())?,
+                    timeout,
+                );
+                let started = Instant::now();
+                let value = self
+                    .call_within(
+                        "Runtime.evaluate",
+                        json!({"expression":expr,"awaitPromise":true,"returnByValue":true,"timeout":timeout}),
+                        Duration::from_millis(timeout + 1000),
+                        ex,
+                    )
+                    .await
+                    .map_err(|e| {
+                        if started.elapsed() >= Duration::from_millis(timeout) {
+                            format!("WebMCP tool '{name}' did not finish within {timeout} ms")
+                        } else {
+                            e
+                        }
+                    })?;
+                if let Some(thrown) = value.get("exceptionDetails") {
+                    let detail = thrown["exception"]["description"]
+                        .as_str()
+                        .or(thrown["text"].as_str())
+                        .unwrap_or("unknown error");
+                    return Err(format!("WebMCP tool '{name}' threw: {}", detail.chars().take(2000).collect::<String>()));
+                }
+                let out = value["result"].get("value").cloned().unwrap_or(Value::Null);
+                if out.to_string().len() > EVAL_RESULT {
+                    return Err(format!("Result exceeds {EVAL_RESULT} bytes"));
+                }
+                let page = self.version(ex).await.ok();
+                Ok(json!({"name":name,"result":out,"url":page.as_ref().map(|p| p["page"]["url"].clone())}))
+            }
             "browser.download" => {
                 let url = args["url"]
                     .as_str()

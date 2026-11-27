@@ -28,7 +28,7 @@ def main():
     (mod / 'mod.json').write_text('{"place":"none"}')
     (mod / 'main.js').write_text('import { View, div } from "gpui-kit";\nimport { notify } from "herdr";\nexport default class extends View { init() { notify({ title: "Toast smoke", body: "The page stays", timeout: 4000 }); } render() { return div(); } }\n')
     for page in ['one.html', 'two.html']:
-        (pages / page).write_text(f'<!doctype html><meta name="viewport" content="width=device-width,initial-scale=1"><title>{page}</title><style>body{{font:20px system-ui;padding:24px}}button{{font:inherit}}</style><h1>Native Herdr browser</h1><p>Page {page}. Rendered by native Chromium.</p><button onclick="this.textContent=\'Clicked\'">Click test</button><a href="/two.html">Next page</a><script>document.title="{page} / JavaScript ready"</script>')
+        (pages / page).write_text(f'<!doctype html><meta name="viewport" content="width=device-width,initial-scale=1"><title>{page}</title><style>body{{font:20px system-ui;padding:24px}}button{{font:inherit}}</style><h1>Native Herdr browser</h1><p>Page {page}. Rendered by native Chromium.</p><button onclick="this.textContent=\'Clicked\'">Click test</button><a href="/two.html">Next page</a><script>if(document.modelContext){{document.modelContext.registerTool({{name:"echo",description:"Echo input",inputSchema:{{type:"object",properties:{{msg:{{type:"string"}}}}}},execute:async(i)=>({{echoed:i.msg,nav:Boolean(navigator.modelContext)}})}});}}document.title="{page} / JavaScript ready"</script>')
     (pages / 'download.bin').write_bytes(b'Herdr native download check\n')
     class Handler(SimpleHTTPRequestHandler):
         def do_GET(self):
@@ -110,6 +110,10 @@ def main():
             return value
         first = until(lambda: (x if (x := inspected()).get('title') == 'one.html / JavaScript ready' and x.get('native', {}).get('shown') and not x.get('loading') else None), 'native page and JavaScript')
         bounds = first['native']['bounds']; assert bounds[2] > 100 and bounds[3] > 100, first
+        wm_tools = command('browser.tools', pane=pane)
+        assert [t['name'] for t in wm_tools.get('tools', [])] == ['echo'], wm_tools
+        wm_call = command('browser.tool', pane=pane, name='echo', input={'msg': 'hello-webmcp'})
+        assert wm_call.get('result') == {'echoed': 'hello-webmcp', 'nav': True}, wm_call
         command('browser.navigate', pane=pane, url=url + '/two.html')
         until(lambda: inspected().get('title') == 'two.html / JavaScript ready', 'second page')
         command('browser.back', pane=pane)

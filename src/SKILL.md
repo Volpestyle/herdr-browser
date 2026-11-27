@@ -271,6 +271,8 @@ Page commands return their result through `herdr-browser do`:
     stdout or chat. Wrap `herdr-browser do browser.eval` in a local script that reads
     the subprocess stdout in memory and pipes it straight to a `0600` file or a
     secret CLI (`gh secret set`, Keychain) without echoing a byte.
+- `browser.tools {pane?}`: list WebMCP tools the page registered on `document.modelContext` or `navigator.modelContext` (name, description, inputSchema, annotations).
+- `browser.tool {pane?, name, input?, timeout?}`: invoke a registered WebMCP tool by `name` with optional JSON `input` (default timeout 15000 ms, maximum 120000 ms). Like `browser.eval`, a person pane needs `confirmed`.
 - `browser.download {pane?, url, timeout?}`: save a file with the page's own
   sign-in. The page fetches `url` (relative, `data:` and `blob:` URLs too; another
   site only if it lets this page read it, CORS, and without cookies when that site
