@@ -577,15 +577,49 @@ export default class Settings extends View {
       )
       .child(div().h(18))
       .child(this.heading(t, "Agent cursors"))
+      .child((() => {
+        const styles = [
+          ["auto", "Auto"],
+          ["colored", "Colored"],
+          ["neutral", "Plain"],
+          ["cute", "Cute"],
+          ["off", "Off"],
+        ];
+        const cur = styles.some(([v]) => v === this.person.agent_cursor) ? this.person.agent_cursor : "auto";
+        const idx = styles.findIndex(([v]) => v === cur);
+        const stepStyle = (dir) => (_e, cx) => this.change((p) => {
+          const next = styles[Math.max(0, Math.min(styles.length - 1, idx + dir))][0];
+          if (next === "auto") delete p.agent_cursor;
+          else p.agent_cursor = next;
+        }, cx);
+        return this.row(
+          t,
+          "Cursor style",
+          "Auto shows a plain mouse for one agent and distinct colors when multiple agents act on the same pane.",
+          this.stepper(t, "st-agent-cursor-style", styles[idx][1], stepStyle(-1), stepStyle(1)),
+        );
+      })())
       .child(
         this.row(
           t,
-          "Cute agent cursor",
-          "Use the brighter purple cursor with a face when agents drive visible browser panes.",
-          this.toggle(t, "st-agent-cursor", this.person.agent_cursor === "cute", (_e, cx) =>
+          "Show agent labels",
+          "Show a name pill next to each agent cursor. Off by default for a cleaner view.",
+          this.toggle(t, "st-agent-cursor-labels", this.person.agent_cursor_labels === true, (_e, cx) =>
             this.change((p) => {
-              if (p.agent_cursor === "cute") delete p.agent_cursor;
-              else p.agent_cursor = "cute";
+              if (p.agent_cursor_labels === true) delete p.agent_cursor_labels;
+              else p.agent_cursor_labels = true;
+            }, cx)),
+        ),
+      )
+      .child(
+        this.row(
+          t,
+          "Highlight target elements",
+          "Draw a subtle outline around buttons and fields when an agent clicks, types, or scrolls to them.",
+          this.toggle(t, "st-agent-cursor-highlight", this.person.agent_cursor_highlight !== false, (_e, cx) =>
+            this.change((p) => {
+              if (p.agent_cursor_highlight === false) delete p.agent_cursor_highlight;
+              else p.agent_cursor_highlight = false;
             }, cx)),
         ),
       )
@@ -612,6 +646,28 @@ export default class Settings extends View {
           "Keep cursor visible",
           "How long an agent's cursor stays on screen after moving, clicking, or acting on a page (default 30s). Always keeps it visible until the pane closes.",
           this.stepper(t, "st-agent-cursor-idle", label, stepIdle(-1), stepIdle(1)),
+        );
+      })())
+      .child((() => {
+        const modes = [
+          ["neutral", "Plain"],
+          ["colored", "Colored"],
+          ["cute", "Cute"],
+          ["off", "Off"],
+        ];
+        const raw = this.person.agent_cursor_record === "none" ? "off" : this.person.agent_cursor_record;
+        const cur = modes.some(([v]) => v === raw) ? raw : "neutral";
+        const idx = modes.findIndex(([v]) => v === cur);
+        const stepRec = (dir) => (_e, cx) => this.change((p) => {
+          const next = modes[Math.max(0, Math.min(modes.length - 1, idx + dir))][0];
+          if (next === "neutral") delete p.agent_cursor_record;
+          else p.agent_cursor_record = next;
+        }, cx);
+        return this.row(
+          t,
+          "Recording cursor",
+          "Cursor drawn inside built-in Rec videos. Plain uses a monochrome mouse pointer with no labels.",
+          this.stepper(t, "st-agent-cursor-record", modes[idx][1], stepRec(-1), stepRec(1)),
         );
       })());
   }

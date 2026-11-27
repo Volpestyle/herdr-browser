@@ -342,6 +342,7 @@ struct CursorLayers {
     badge: Retained<AnyObject>,
     ripple: Retained<AnyObject>,
     highlight: Retained<AnyObject>,
+    rendered_color: &'static str,
     cute: bool,
     badge_label: String,
     badge_w: f64,
@@ -394,25 +395,95 @@ pub struct Host {
     focus_gate: Arc<AtomicBool>,
     monitor: Option<Retained<AnyObject>>,
 }
-const AGENT_CURSOR: &[u8] = br##"<svg xmlns="http://www.w3.org/2000/svg" width="28" height="28" viewBox="0 0 28 28"><path d="M4 3.2 L4 21 Q4 23.2 5.9 21.7 L9.9 18.6 L12.9 24.5 Q13.7 26 15.2 25.3 L16.6 24.6 Q18 23.9 17.3 22.5 L14.4 16.9 L19.4 16.6 Q21.6 16.4 20 14.9 L6 2.2 Q4 0.9 4 3.2 Z" fill="#000" fill-opacity=".5" stroke="#fff" stroke-width="1.8" stroke-linejoin="round"/></svg>"##;
+const AGENT_CURSOR: &[u8] = br##"<svg xmlns="http://www.w3.org/2000/svg" width="28" height="28" viewBox="0 0 28 28"><path d="M4 3.2 L4 21 Q4 23.2 5.9 21.7 L9.9 18.6 L12.9 24.5 Q13.7 26 15.2 25.3 L16.6 24.6 Q18 23.9 17.3 22.5 L14.4 16.9 L19.4 16.6 Q21.6 16.4 20 14.9 L6 2.2 Q4 0.9 4 3.2 Z" fill="#111111" stroke="#fff" stroke-width="1.8" stroke-linejoin="round"/></svg>"##;
 const CUTE_AGENT_CURSOR: &[u8] = br##"<svg xmlns="http://www.w3.org/2000/svg" width="28" height="28" viewBox="0 0 28 28"><defs><linearGradient id="g" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#B69CFF"/><stop offset="1" stop-color="#7C5CFF"/></linearGradient></defs><path d="M4 3.2 L4 21 Q4 23.2 5.9 21.7 L9.9 18.6 L12.9 24.5 Q13.7 26 15.2 25.3 L16.6 24.6 Q18 23.9 17.3 22.5 L14.4 16.9 L19.4 16.6 Q21.6 16.4 20 14.9 L6 2.2 Q4 0.9 4 3.2 Z" fill="url(#g)" stroke="#fff" stroke-width="1.8" stroke-linejoin="round"/><circle cx="8" cy="11.6" r="1.25" fill="#2A1B5E"/><circle cx="11.5" cy="11.6" r="1.25" fill="#2A1B5E"/><circle cx="8.4" cy="11.1" r=".45" fill="#fff"/><circle cx="11.9" cy="11.1" r=".45" fill="#fff"/><ellipse cx="6.8" cy="14" rx="1.1" ry=".6" fill="#FF8FB8" opacity=".75"/><ellipse cx="12.8" cy="14" rx="1.1" ry=".6" fill="#FF8FB8" opacity=".75"/><path d="M8.9 13.5 Q9.75 14.5 10.6 13.5" fill="none" stroke="#2A1B5E" stroke-width=".8" stroke-linecap="round"/></svg>"##;
 
+const NEUTRAL_CURSOR_COLOR: &str = "#111111";
 const DEFAULT_AGENT_CURSOR_IDLE_SECS: f64 = 30.;
 const MAX_AGENT_CURSOR_IDLE_SECS: f64 = 3600.;
 const HIGHLIGHT_HOLD_SECS: f64 = 1.1;
 const HIGHLIGHT_FADE_SECS: f64 = 0.45;
 const BADGE_HEIGHT: f64 = 20.;
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum CursorStyle {
+    /// Plain neutral mouse for a single agent; distinct per-agent colors once >1 agent is active.
+    Auto,
+    /// Always use distinct per-agent colors.
+    Colored,
+    /// Always use the plain neutral mouse pointer.
+    Neutral,
+    /// Brighter cute cursor with a face.
+    Cute,
+    /// Hide the cursor overlay completely.
+    Off,
+}
+
+impl CursorStyle {
+    fn as_str(self) -> &'static str {
+        match self {
+            Self::Auto => "auto",
+            Self::Colored => "colored",
+            Self::Neutral => "neutral",
+            Self::Cute => "cute",
+            Self::Off => "off",
+        }
+    }
+
+    fn parse(raw: Option<&str>, default: Self) -> Self {
+        match raw.map(str::trim) {
+            Some("auto") => Self::Auto,
+            Some("colored") => Self::Colored,
+            Some("neutral") => Self::Neutral,
+            Some("cute") => Self::Cute,
+            Some("off" | "none") => Self::Off,
+            _ => default,
+        }
+    }
+}
+
 #[derive(Clone, Copy, Debug, PartialEq)]
 struct CursorPrefs {
-    cute: bool,
+    style: CursorStyle,
+    labels: bool,
+    highlight: bool,
+    record_style: CursorStyle,
     /// Seconds before an idle cursor fades out; `0.0` keeps it visible.
     idle_secs: f64,
 }
 
+impl Default for CursorPrefs {
+    fn default() -> Self {
+        Self {
+            style: CursorStyle::Auto,
+            labels: false,
+            highlight: true,
+            record_style: CursorStyle::Neutral,
+            idle_secs: DEFAULT_AGENT_CURSOR_IDLE_SECS,
+        }
+    }
+}
+
 fn parse_cursor_prefs(text: &str) -> CursorPrefs {
     let v = serde_json::from_str::<Value>(text).ok();
-    let cute = v.as_ref().is_some_and(|v| v["agent_cursor"] == "cute");
+    let style = CursorStyle::parse(
+        v.as_ref().and_then(|v| v.get("agent_cursor")).and_then(Value::as_str),
+        CursorStyle::Auto,
+    );
+    let labels = v
+        .as_ref()
+        .and_then(|v| v.get("agent_cursor_labels"))
+        .and_then(Value::as_bool)
+        .unwrap_or(false);
+    let highlight = v
+        .as_ref()
+        .and_then(|v| v.get("agent_cursor_highlight"))
+        .and_then(Value::as_bool)
+        .unwrap_or(true);
+    let record_style = CursorStyle::parse(
+        v.as_ref().and_then(|v| v.get("agent_cursor_record")).and_then(Value::as_str),
+        CursorStyle::Neutral,
+    );
     let idle_secs = v
         .as_ref()
         .and_then(|v| v.get("agent_cursor_idle_secs"))
@@ -420,7 +491,7 @@ fn parse_cursor_prefs(text: &str) -> CursorPrefs {
         .filter(|n| n.is_finite() && *n >= 0.)
         .map(|n| n.min(MAX_AGENT_CURSOR_IDLE_SECS))
         .unwrap_or(DEFAULT_AGENT_CURSOR_IDLE_SECS);
-    CursorPrefs { cute, idle_secs }
+    CursorPrefs { style, labels, highlight, record_style, idle_secs }
 }
 
 const AGENT_COLORS: [&str; 8] = ["#3E63DD", "#E5484D", "#30A46C", "#F76B15", "#8E4EC6", "#12A594", "#D6409F", "#C29B00"];
@@ -441,7 +512,7 @@ fn cursor_prefs() -> CursorPrefs {
         }
         let prefs = std::fs::read_to_string(crate::settings::path())
             .map(|text| parse_cursor_prefs(&text))
-            .unwrap_or(CursorPrefs { cute: false, idle_secs: DEFAULT_AGENT_CURSOR_IDLE_SECS });
+            .unwrap_or_default();
         *cache.borrow_mut() = Some((now, prefs));
         prefs
     })
@@ -467,6 +538,23 @@ fn agent_slot_and_color(caller: Option<&str>) -> (usize, &'static str) {
 
 fn agent_color(caller: Option<&str>) -> &'static str {
     agent_slot_and_color(caller).1
+}
+
+/// Resolve the rendered fill color and cute flag for a live cursor slot given the active count on this pane.
+fn resolve_cursor_appearance(style: CursorStyle, agent_color: &'static str, active_agents: usize) -> Option<(&'static str, bool)> {
+    match style {
+        CursorStyle::Off => None,
+        CursorStyle::Neutral => Some((NEUTRAL_CURSOR_COLOR, false)),
+        CursorStyle::Colored => Some((agent_color, false)),
+        CursorStyle::Cute => Some((if active_agents > 1 { agent_color } else { "#7C5CFF" }, true)),
+        CursorStyle::Auto => {
+            if active_agents > 1 {
+                Some((agent_color, false))
+            } else {
+                Some((NEUTRAL_CURSOR_COLOR, false))
+            }
+        }
+    }
 }
 
 fn normalize_cursor_label(caller: Option<&str>, label: Option<&str>) -> String {
@@ -510,19 +598,28 @@ fn escape_xml(text: &str) -> String {
     out
 }
 
-fn agent_cursor_svg(caller: Option<&str>, cute: bool) -> Vec<u8> {
-    let svg = String::from_utf8_lossy(if cute { CUTE_AGENT_CURSOR } else { AGENT_CURSOR }).into_owned();
-    let color = agent_color(caller);
-    let fill = format!(r#"fill="{color}""#);
-    svg.replace(r##"fill="#000" fill-opacity=".5""##, &fill).replace(r#"fill="url(#g)""#, &fill).into_bytes()
+fn cursor_svg_for_color(color: &str, cute: bool) -> Vec<u8> {
+    if cute {
+        let svg = String::from_utf8_lossy(CUTE_AGENT_CURSOR).into_owned();
+        if color == "#7C5CFF" {
+            return svg.into_bytes();
+        }
+        return svg.replace(r#"fill="url(#g)""#, &format!(r#"fill="{color}""#)).into_bytes();
+    }
+    let svg = String::from_utf8_lossy(AGENT_CURSOR).into_owned();
+    svg.replace(r##"fill="#111111""##, &format!(r#"fill="{color}""#)).into_bytes()
 }
 
-fn agent_ripple_svg(caller: Option<&str>) -> Vec<u8> {
-    let color = agent_color(caller);
+fn ripple_svg_for_color(color: &str) -> Vec<u8> {
     format!(
         r##"<svg xmlns="http://www.w3.org/2000/svg" width="32" height="32" viewBox="0 0 32 32"><circle cx="16" cy="16" r="12" fill="none" stroke="#fff" stroke-opacity=".85" stroke-width="3.6"/><circle cx="16" cy="16" r="12" fill="none" stroke="{color}" stroke-opacity=".95" stroke-width="2"/></svg>"##
     )
     .into_bytes()
+}
+
+#[cfg(test)]
+fn agent_ripple_svg(caller: Option<&str>) -> Vec<u8> {
+    ripple_svg_for_color(agent_color(caller))
 }
 
 fn agent_badge_svg(color: &str, label: &str) -> (Vec<u8>, f64, f64) {
@@ -570,8 +667,17 @@ fn badge_origin(x: f64, y: f64, badge_w: f64, badge_h: f64, bounds_w: f64, bound
     (bx, by)
 }
 
-fn agent_cursor(caller: Option<&str>) -> Vec<u8> {
-    agent_cursor_svg(caller, cursor_prefs().cute)
+fn record_cursor_svg_for_prefs(caller: Option<&str>, prefs: CursorPrefs) -> Option<Vec<u8>> {
+    match prefs.record_style {
+        CursorStyle::Off => None,
+        CursorStyle::Neutral | CursorStyle::Auto => Some(cursor_svg_for_color(NEUTRAL_CURSOR_COLOR, false)),
+        CursorStyle::Colored => Some(cursor_svg_for_color(agent_color(caller), false)),
+        CursorStyle::Cute => Some(cursor_svg_for_color("#7C5CFF", true)),
+    }
+}
+
+fn record_cursor(caller: Option<&str>) -> Option<Vec<u8>> {
+    record_cursor_svg_for_prefs(caller, cursor_prefs())
 }
 
 unsafe fn set_layer_svg(layer: &AnyObject, svg: &[u8], size: NSSize, scale: f64) {
@@ -583,6 +689,15 @@ unsafe fn set_layer_svg(layer: &AnyObject, svg: &[u8], size: NSSize, scale: f64)
         let _: () = msg_send![layer, setContents: &*image];
         let _: () = msg_send![layer, setContentsScale: scale];
     }
+}
+
+unsafe fn hide_layer(layer: &AnyObject) {
+    let _: () = msg_send![layer, removeAnimationForKey: &*NSString::from_str("fade")];
+    let _: () = msg_send![layer, removeAnimationForKey: &*NSString::from_str("highlightFade")];
+    let _: () = msg_send![class!(CATransaction), begin];
+    let _: () = msg_send![class!(CATransaction), setDisableActions: true];
+    let _: () = msg_send![layer, setOpacity: 0_f32];
+    let _: () = msg_send![class!(CATransaction), commit];
 }
 
 unsafe fn apply_fade(layer: &AnyObject, media_now: f64, idle_secs: f64) {
@@ -645,8 +760,8 @@ unsafe fn show_highlight(
 unsafe fn ensure_slot_layers(
     container: &NSView,
     slot: &mut CursorSlot,
-    caller_key: &str,
-    prefs: CursorPrefs,
+    render_color: &'static str,
+    cute: bool,
     scale: f64,
 ) -> Option<bool> {
     if slot.layers.is_some() {
@@ -668,7 +783,7 @@ unsafe fn ensure_slot_layers(
     let ripple: Retained<AnyObject> = msg_send![class!(CALayer), layer];
     let _: () = msg_send![&*ripple, setBounds: NSRect::new(NSPoint::new(0., 0.), ripple_size)];
     let _: () = msg_send![&*ripple, setAnchorPoint: NSPoint::new(0.5, 0.5)];
-    unsafe { set_layer_svg(&ripple, &agent_ripple_svg(Some(caller_key)), ripple_size, scale) };
+    unsafe { set_layer_svg(&ripple, &ripple_svg_for_color(render_color), ripple_size, scale) };
     let _: () = msg_send![&*ripple, setZPosition: 999_999_f64];
     let _: () = msg_send![&*ripple, setOpacity: 0_f32];
     let _: () = msg_send![root, addSublayer: &*ripple];
@@ -678,7 +793,7 @@ unsafe fn ensure_slot_layers(
     let cursor: Retained<AnyObject> = msg_send![class!(CALayer), layer];
     let _: () = msg_send![&*cursor, setBounds: NSRect::new(NSPoint::new(0., 0.), size)];
     let _: () = msg_send![&*cursor, setAnchorPoint: NSPoint::new(hot.x / size.width, 1. - hot.y / size.height)];
-    unsafe { set_layer_svg(&cursor, &agent_cursor_svg(Some(caller_key), prefs.cute), size, scale) };
+    unsafe { set_layer_svg(&cursor, &cursor_svg_for_color(render_color, cute), size, scale) };
     let _: () = msg_send![&*cursor, setZPosition: 1e6_f64];
     let _: () = msg_send![&*cursor, setOpacity: 0_f32];
     let _: () = msg_send![&*cursor, setShadowOpacity: 0.35_f32];
@@ -686,7 +801,7 @@ unsafe fn ensure_slot_layers(
     let _: () = msg_send![&*cursor, setShadowOffset: NSSize::new(0., -1.)];
     let _: () = msg_send![root, addSublayer: &*cursor];
 
-    let (badge_svg, badge_w, badge_h) = agent_badge_svg(slot.color, &slot.label);
+    let (badge_svg, badge_w, badge_h) = agent_badge_svg(render_color, &slot.label);
     let badge_size = NSSize::new(badge_w, badge_h);
     let badge: Retained<AnyObject> = msg_send![class!(CALayer), layer];
     let _: () = msg_send![&*badge, setBounds: NSRect::new(NSPoint::new(0., 0.), badge_size)];
@@ -704,12 +819,44 @@ unsafe fn ensure_slot_layers(
         badge,
         ripple,
         highlight,
-        cute: prefs.cute,
+        rendered_color: render_color,
+        cute,
         badge_label: slot.label.clone(),
         badge_w,
         badge_h,
     });
     Some(true)
+}
+
+unsafe fn sync_slot_appearance(layers: &mut CursorLayers, label: &str, render_color: &'static str, cute: bool, scale: f64) {
+    let color_changed = layers.rendered_color != render_color;
+    if color_changed || layers.cute != cute {
+        unsafe { set_layer_svg(&layers.cursor, &cursor_svg_for_color(render_color, cute), NSSize::new(28., 28.), scale) };
+        layers.cute = cute;
+    }
+    if color_changed {
+        unsafe { set_layer_svg(&layers.ripple, &ripple_svg_for_color(render_color), NSSize::new(32., 32.), scale) };
+    }
+    if color_changed || layers.badge_label != label {
+        let (badge_svg, bw, bh) = agent_badge_svg(render_color, label);
+        let badge_size = NSSize::new(bw, bh);
+        let _: () = msg_send![&*layers.badge, setBounds: NSRect::new(NSPoint::new(0., 0.), badge_size)];
+        unsafe { set_layer_svg(&layers.badge, &badge_svg, badge_size, scale) };
+        layers.badge_label = label.to_owned();
+        layers.badge_w = bw;
+        layers.badge_h = bh;
+    }
+    layers.rendered_color = render_color;
+}
+
+fn active_slot_count(slots: &HashMap<String, CursorSlot>, now: Instant, idle_secs: f64) -> usize {
+    if idle_secs == 0. {
+        return slots.len();
+    }
+    slots
+        .values()
+        .filter(|s| now.saturating_duration_since(s.last_seen).as_secs_f64() < idle_secs)
+        .count()
 }
 
 pub(super) fn move_pointer_for_target(target_id: &str, update: PointerUpdate<'_>) -> bool {
@@ -745,6 +892,7 @@ fn move_pointer(
     let label = normalize_cursor_label(update.caller, update.label);
     let (slot_index, color) = agent_slot_and_color(Some(&key));
     let now_instant = Instant::now();
+    let prefs = cursor_prefs();
 
     let mut slots = slots.borrow_mut();
     let slot = slots.entry(key.clone()).or_insert_with(|| CursorSlot {
@@ -777,12 +925,49 @@ fn move_pointer(
         slot.clicks += 1;
     }
 
+    if prefs.style == CursorStyle::Off {
+        unsafe {
+            for s in slots.values() {
+                if let Some(layers) = &s.layers {
+                    hide_layer(&layers.cursor);
+                    hide_layer(&layers.badge);
+                    hide_layer(&layers.highlight);
+                }
+            }
+        }
+        return false;
+    }
+
     let Some(window) = container.window() else { return false };
     let bounds = container.bounds().size;
     if container.isHidden() || !window.isVisible() || bounds.width < 1. || bounds.height < 1. {
         return false;
     }
 
+    let active_agents = active_slot_count(&slots, now_instant, prefs.idle_secs);
+    let scale = window.backingScaleFactor();
+    // If Auto mode just transitioned between 1 agent (neutral) and >1 agents (colored),
+    // re-tint sibling active cursors on this pane right away so every agent is distinct.
+    unsafe {
+        for (other_key, other) in slots.iter_mut() {
+            if other_key == &key {
+                continue;
+            }
+            if let Some((other_color, other_cute)) = resolve_cursor_appearance(prefs.style, other.color, active_agents)
+                && let Some(layers) = other.layers.as_mut()
+            {
+                sync_slot_appearance(layers, &other.label, other_color, other_cute, scale);
+                if !prefs.labels {
+                    hide_layer(&layers.badge);
+                }
+            }
+        }
+    }
+
+    let slot = slots.get_mut(&key).expect("cursor slot");
+    let Some((render_color, cute)) = resolve_cursor_appearance(prefs.style, slot.color, active_agents) else {
+        return false;
+    };
     let (x, y) = match (slot.last_x, slot.last_y) {
         (Some(lx), Some(ly)) => (lx.clamp(0., bounds.width), ly.clamp(0., bounds.height)),
         _ => {
@@ -793,29 +978,14 @@ fn move_pointer(
         }
     };
 
-    let prefs = cursor_prefs();
     let position = NSPoint::new(x, bounds.height - y);
-    let scale = window.backingScaleFactor();
     unsafe {
-        let Some(fresh) = ensure_slot_layers(container, slot, &key, prefs, scale) else {
+        let Some(fresh) = ensure_slot_layers(container, slot, render_color, cute, scale) else {
             return false;
         };
-        let color = slot.color;
         let label = slot.label.clone();
         let layers = slot.layers.as_mut().expect("cursor layers");
-        if layers.cute != prefs.cute {
-            set_layer_svg(&layers.cursor, &agent_cursor_svg(Some(&key), prefs.cute), NSSize::new(28., 28.), scale);
-            layers.cute = prefs.cute;
-        }
-        if layers.badge_label != label {
-            let (badge_svg, bw, bh) = agent_badge_svg(color, &label);
-            let badge_size = NSSize::new(bw, bh);
-            let _: () = msg_send![&*layers.badge, setBounds: NSRect::new(NSPoint::new(0., 0.), badge_size)];
-            set_layer_svg(&layers.badge, &badge_svg, badge_size, scale);
-            layers.badge_label = label;
-            layers.badge_w = bw;
-            layers.badge_h = bh;
-        }
+        sync_slot_appearance(layers, &label, render_color, cute, scale);
         let (bx, by) = badge_origin(x, y, layers.badge_w, layers.badge_h, bounds.width, bounds.height);
         let badge_pos = NSPoint::new(bx, bounds.height - by);
         let glide = match update.action {
@@ -833,8 +1003,12 @@ fn move_pointer(
         let _: () = msg_send![class!(CATransaction), commit];
 
         let media_now = CACurrentMediaTime();
-        if let Some(r) = rect {
-            show_highlight(&layers.highlight, color, r, bounds.height, scale, media_now, HIGHLIGHT_HOLD_SECS);
+        if prefs.highlight {
+            if let Some(r) = rect {
+                show_highlight(&layers.highlight, render_color, r, bounds.height, scale, media_now, HIGHLIGHT_HOLD_SECS);
+            }
+        } else {
+            hide_layer(&layers.highlight);
         }
 
         if matches!(update.action, PointerAction::Click | PointerAction::Tap) {
@@ -881,7 +1055,11 @@ fn move_pointer(
         }
 
         apply_fade(&layers.cursor, media_now, prefs.idle_secs);
-        apply_fade(&layers.badge, media_now, prefs.idle_secs);
+        if prefs.labels {
+            apply_fade(&layers.badge, media_now, prefs.idle_secs);
+        } else {
+            hide_layer(&layers.badge);
+        }
     }
     true
 }
@@ -896,13 +1074,29 @@ fn sync_visible_cursors(container: &NSView, slots: &RefCell<HashMap<String, Curs
     let scale = window.backingScaleFactor();
     let now_instant = Instant::now();
     let mut slots = slots.borrow_mut();
+    if prefs.style == CursorStyle::Off {
+        unsafe {
+            for s in slots.values() {
+                if let Some(layers) = &s.layers {
+                    hide_layer(&layers.cursor);
+                    hide_layer(&layers.badge);
+                    hide_layer(&layers.highlight);
+                }
+            }
+        }
+        return;
+    }
+    let active_agents = active_slot_count(&slots, now_instant, prefs.idle_secs);
     unsafe {
         let media_now = CACurrentMediaTime();
-        for (key, slot) in slots.iter_mut() {
+        for slot in slots.values_mut() {
             let elapsed = now_instant.saturating_duration_since(slot.last_seen).as_secs_f64();
             if prefs.idle_secs > 0. && elapsed >= prefs.idle_secs {
                 continue;
             }
+            let Some((render_color, cute)) = resolve_cursor_appearance(prefs.style, slot.color, active_agents) else {
+                continue;
+            };
             let remaining = if prefs.idle_secs == 0. {
                 0.
             } else {
@@ -917,27 +1111,14 @@ fn sync_visible_cursors(container: &NSView, slots: &RefCell<HashMap<String, Curs
                     (dx, dy)
                 }
             };
-            if ensure_slot_layers(container, slot, key, prefs, scale).is_none() {
+            if ensure_slot_layers(container, slot, render_color, cute, scale).is_none() {
                 continue;
             }
-            let color = slot.color;
             let label = slot.label.clone();
             let last_rect = slot.last_rect;
             let last_rect_at = slot.last_rect_at;
             let layers = slot.layers.as_mut().expect("cursor layers");
-            if layers.cute != prefs.cute {
-                set_layer_svg(&layers.cursor, &agent_cursor_svg(Some(key), prefs.cute), NSSize::new(28., 28.), scale);
-                layers.cute = prefs.cute;
-            }
-            if layers.badge_label != label {
-                let (badge_svg, bw, bh) = agent_badge_svg(color, &label);
-                let badge_size = NSSize::new(bw, bh);
-                let _: () = msg_send![&*layers.badge, setBounds: NSRect::new(NSPoint::new(0., 0.), badge_size)];
-                set_layer_svg(&layers.badge, &badge_svg, badge_size, scale);
-                layers.badge_label = label;
-                layers.badge_w = bw;
-                layers.badge_h = bh;
-            }
+            sync_slot_appearance(layers, &label, render_color, cute, scale);
             let position = NSPoint::new(x, bounds.height - y);
             let (bx, by) = badge_origin(x, y, layers.badge_w, layers.badge_h, bounds.width, bounds.height);
             let badge_pos = NSPoint::new(bx, bounds.height - by);
@@ -947,13 +1128,21 @@ fn sync_visible_cursors(container: &NSView, slots: &RefCell<HashMap<String, Curs
             let _: () = msg_send![&*layers.badge, setPosition: badge_pos];
             let _: () = msg_send![class!(CATransaction), commit];
             apply_fade(&layers.cursor, media_now, remaining);
-            apply_fade(&layers.badge, media_now, remaining);
-            if let (Some(r), Some(at)) = (last_rect, last_rect_at) {
-                let rect_age = now_instant.saturating_duration_since(at).as_secs_f64();
-                if rect_age < HIGHLIGHT_HOLD_SECS + 0.5 {
-                    let hold = (HIGHLIGHT_HOLD_SECS - rect_age).max(0.3);
-                    show_highlight(&layers.highlight, color, r, bounds.height, scale, media_now, hold);
+            if prefs.labels {
+                apply_fade(&layers.badge, media_now, remaining);
+            } else {
+                hide_layer(&layers.badge);
+            }
+            if prefs.highlight {
+                if let (Some(r), Some(at)) = (last_rect, last_rect_at) {
+                    let rect_age = now_instant.saturating_duration_since(at).as_secs_f64();
+                    if rect_age < HIGHLIGHT_HOLD_SECS + 0.5 {
+                        let hold = (HIGHLIGHT_HOLD_SECS - rect_age).max(0.3);
+                        show_highlight(&layers.highlight, render_color, r, bounds.height, scale, media_now, hold);
+                    }
                 }
+            } else {
+                hide_layer(&layers.highlight);
             }
         }
     }
@@ -1309,7 +1498,7 @@ impl Host {
         let control = Rc::new(super::control::Control::new(
             browser.as_ref().ok_or("Browser is closed")?,
             Box::new(move |update| move_pointer(&container, &layers, update)),
-            agent_cursor,
+            record_cursor,
             cursor_idle_ms,
             Box::new(move |id, is_page| {
                 *target_id.borrow_mut() = Some(id);
@@ -1472,6 +1661,7 @@ impl Host {
     pub fn inspect(&self) -> Value {
         let browser = self.browser.borrow();
         let browser = browser.as_ref();
+        let prefs = cursor_prefs();
         let slots = self.layers.borrow();
         let cursor_moves: u64 = slots.values().map(|s| s.moves).sum();
         let cursor_clicks: u64 = slots.values().map(|s| s.clicks).sum();
@@ -1483,6 +1673,7 @@ impl Host {
                     "caller": caller,
                     "label": s.label,
                     "color": s.color,
+                    "rendered_color": s.layers.as_ref().map(|l| l.rendered_color),
                     "x": s.last_x,
                     "y": s.last_y,
                     "moves": s.moves,
@@ -1494,6 +1685,10 @@ impl Host {
             .collect();
         agents.sort_by(|a, b| a["caller"].as_str().cmp(&b["caller"].as_str()));
         let agent_cursors = json!({
+            "style": prefs.style.as_str(),
+            "labels": prefs.labels,
+            "highlight": prefs.highlight,
+            "record_style": prefs.record_style.as_str(),
             "count": slots.len(),
             "moves": cursor_moves,
             "clicks": cursor_clicks,
@@ -1521,10 +1716,11 @@ impl Drop for Host {
 #[cfg(test)]
 mod tests {
     use super::{
-        AGENT_COLORS, CursorPrefs, DEFAULT_AGENT_CURSOR_IDLE_SECS, MAX_AGENT_CURSOR_IDLE_SECS,
-        agent_badge_svg, agent_color, agent_highlight_svg, agent_ripple_svg, badge_origin,
-        ctrl_cmd_shortcut, ctrl_shortcut, download_url, normalize_cursor_label, parse_cursor_prefs,
-        shortcut, subframe_url,
+        AGENT_COLORS, CursorPrefs, CursorStyle, DEFAULT_AGENT_CURSOR_IDLE_SECS,
+        MAX_AGENT_CURSOR_IDLE_SECS, NEUTRAL_CURSOR_COLOR, agent_badge_svg, agent_color,
+        agent_highlight_svg, agent_ripple_svg, badge_origin, ctrl_cmd_shortcut, ctrl_shortcut,
+        download_url, normalize_cursor_label, parse_cursor_prefs, record_cursor_svg_for_prefs,
+        resolve_cursor_appearance, shortcut, subframe_url,
     };
     #[test]
     fn subframe_url_blocks_external_protocols() {
@@ -1541,26 +1737,57 @@ mod tests {
     #[test]
     fn cursor_prefs_parses_style_and_idle_timeout() {
         assert_eq!(DEFAULT_AGENT_CURSOR_IDLE_SECS, 30.0);
+        assert_eq!(parse_cursor_prefs("{}"), CursorPrefs::default());
         assert_eq!(
-            parse_cursor_prefs("{}"),
-            CursorPrefs { cute: false, idle_secs: DEFAULT_AGENT_CURSOR_IDLE_SECS }
+            parse_cursor_prefs(r#"{"agent_cursor":"cute","agent_cursor_labels":true,"agent_cursor_highlight":false,"agent_cursor_record":"off","agent_cursor_idle_secs":0}"#),
+            CursorPrefs {
+                style: CursorStyle::Cute,
+                labels: true,
+                highlight: false,
+                record_style: CursorStyle::Off,
+                idle_secs: 0.0,
+            }
         );
         assert_eq!(
-            parse_cursor_prefs(r#"{"agent_cursor":"cute","agent_cursor_idle_secs":0}"#),
-            CursorPrefs { cute: true, idle_secs: 0.0 }
-        );
-        assert_eq!(
-            parse_cursor_prefs(r#"{"agent_cursor_idle_secs":15.5}"#),
-            CursorPrefs { cute: false, idle_secs: 15.5 }
+            parse_cursor_prefs(r#"{"agent_cursor":"neutral","agent_cursor_idle_secs":15.5}"#),
+            CursorPrefs { style: CursorStyle::Neutral, idle_secs: 15.5, ..CursorPrefs::default() }
         );
         assert_eq!(
             parse_cursor_prefs(r#"{"agent_cursor_idle_secs":-3}"#),
-            CursorPrefs { cute: false, idle_secs: DEFAULT_AGENT_CURSOR_IDLE_SECS }
+            CursorPrefs::default()
         );
         assert_eq!(
             parse_cursor_prefs(r#"{"agent_cursor_idle_secs":99999}"#),
-            CursorPrefs { cute: false, idle_secs: MAX_AGENT_CURSOR_IDLE_SECS }
+            CursorPrefs { idle_secs: MAX_AGENT_CURSOR_IDLE_SECS, ..CursorPrefs::default() }
         );
+    }
+    #[test]
+    fn auto_style_uses_plain_mouse_for_one_agent_and_colors_for_multiple() {
+        assert_eq!(
+            resolve_cursor_appearance(CursorStyle::Auto, "#3E63DD", 1),
+            Some((NEUTRAL_CURSOR_COLOR, false))
+        );
+        assert_eq!(
+            resolve_cursor_appearance(CursorStyle::Auto, "#3E63DD", 2),
+            Some(("#3E63DD", false))
+        );
+        assert_eq!(
+            resolve_cursor_appearance(CursorStyle::Colored, "#E5484D", 1),
+            Some(("#E5484D", false))
+        );
+        assert_eq!(
+            resolve_cursor_appearance(CursorStyle::Neutral, "#E5484D", 3),
+            Some((NEUTRAL_CURSOR_COLOR, false))
+        );
+        assert_eq!(resolve_cursor_appearance(CursorStyle::Off, "#E5484D", 2), None);
+        // Recording defaults to a plain neutral mouse arrow and respects Off/Colored.
+        let rec_default = String::from_utf8(record_cursor_svg_for_prefs(Some("a"), CursorPrefs::default()).unwrap()).unwrap();
+        assert!(rec_default.contains(NEUTRAL_CURSOR_COLOR));
+        assert!(record_cursor_svg_for_prefs(Some("a"), CursorPrefs { record_style: CursorStyle::Off, ..CursorPrefs::default() }).is_none());
+        let rec_colored = String::from_utf8(
+            record_cursor_svg_for_prefs(Some("a"), CursorPrefs { record_style: CursorStyle::Colored, ..CursorPrefs::default() }).unwrap()
+        ).unwrap();
+        assert!(rec_colored.contains(agent_color(Some("a"))));
     }
     #[test]
     fn agent_ripple_svg_uses_caller_color() {

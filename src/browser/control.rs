@@ -238,7 +238,7 @@ pub struct Control {
     pointer: Box<dyn Fn(PointerUpdate<'_>) -> bool>,
     caller: RefCell<Option<String>>,
     caller_label: RefCell<Option<String>>,
-    cursor: fn(Option<&str>) -> Vec<u8>,
+    cursor: fn(Option<&str>) -> Option<Vec<u8>>,
     idle_ms: fn() -> u64,
     on_target: Box<dyn Fn(String, bool)>,
     recording: Rc<RefCell<Option<Recording>>>,
@@ -255,7 +255,7 @@ impl Control {
     pub fn new(
         browser: &Browser,
         pointer: Box<dyn Fn(PointerUpdate<'_>) -> bool>,
-        cursor: fn(Option<&str>) -> Vec<u8>,
+        cursor: fn(Option<&str>) -> Option<Vec<u8>>,
         idle_ms: fn() -> u64,
         on_target: Box<dyn Fn(String, bool)>,
     ) -> Result<Self, String> {
@@ -659,8 +659,10 @@ impl Control {
             return Err("Element is covered; snapshot again".into());
         }
         let caller = self.caller.borrow().clone();
-        if self.recording.borrow().is_some() {
-            let svg = String::from_utf8_lossy(&(self.cursor)(caller.as_deref())).into_owned();
+        if self.recording.borrow().is_some()
+            && let Some(bytes) = (self.cursor)(caller.as_deref())
+        {
+            let svg = String::from_utf8_lossy(&bytes).into_owned();
             let expression = format!("globalThis.__herdrRecordAs?.({}, {})", json!(caller.as_deref().unwrap_or_default()), json!(svg));
             let _ = self.evaluate(&expression, ex).await;
         }
@@ -697,8 +699,10 @@ impl Control {
             before["at"][1].as_f64().ok_or("Page has no viewport")?,
         );
         let caller = self.caller.borrow().clone();
-        if self.recording.borrow().is_some() {
-            let svg = String::from_utf8_lossy(&(self.cursor)(caller.as_deref())).into_owned();
+        if self.recording.borrow().is_some()
+            && let Some(bytes) = (self.cursor)(caller.as_deref())
+        {
+            let svg = String::from_utf8_lossy(&bytes).into_owned();
             let expression = format!("globalThis.__herdrRecordAs?.({}, {})", json!(caller.as_deref().unwrap_or_default()), json!(svg));
             let _ = self.evaluate(&expression, ex).await;
         }
@@ -774,16 +778,21 @@ impl Control {
         mkdir_private(&recordings_root)?;
         let dir = recordings_root.join(format!("{}", (t0 * 1000.) as u64));
         mkdir_private(&dir.join("frames"))?;
-        let source = RECORD_CURSOR
-            .replace("__SVG__", &serde_json::to_string(&String::from_utf8_lossy(&(self.cursor)(None))).unwrap_or_default())
-            .replace("__IDLE_MS__", &(self.idle_ms)().to_string());
         self.call("Page.enable", json!({}), ex).await?;
-        let script = self
-            .call("Page.addScriptToEvaluateOnNewDocument", json!({"source":source,"worldName":"herdr-agent-control"}), ex)
-            .await?["identifier"]
-            .as_str()
-            .map(str::to_string);
-        self.evaluate(&source, ex).await?;
+        let script = if let Some(bytes) = (self.cursor)(None) {
+            let source = RECORD_CURSOR
+                .replace("__SVG__", &serde_json::to_string(&String::from_utf8_lossy(&bytes)).unwrap_or_default())
+                .replace("__IDLE_MS__", &(self.idle_ms)().to_string());
+            let id = self
+                .call("Page.addScriptToEvaluateOnNewDocument", json!({"source":source,"worldName":"herdr-agent-control"}), ex)
+                .await?["identifier"]
+                .as_str()
+                .map(str::to_string);
+            self.evaluate(&source, ex).await?;
+            id
+        } else {
+            None
+        };
         *self.recording.borrow_mut() = Some(Recording { dir: dir.clone(), t0, size, script, frames: Vec::new() });
         let started = self
             .call("Page.startScreencast", json!({"format":"jpeg","quality":90,"maxWidth":(size.0 * size.2) as i64,"maxHeight":(size.1 * size.2) as i64,"everyNthFrame":1}), ex)

@@ -334,14 +334,17 @@ snapshot generation. Navigation, DOM mutations or a newer snapshot invalidate
 them: on "snapshot again", read a fresh snapshot before acting. Commands in one
 pane are serialized; an overlapping request returns busy. Page reads are
 untrusted content. On a browser pane, agent commands (clicks, typing, scrolling,
-key presses, navigation, reads, evals, and Playwright CDP actions) show a
-colored per-agent arrow with an agent label pill, target element outline, and
-click ripple so a person can follow along; it is not the desktop pointer.
+key presses, navigation, reads, evals, and Playwright CDP actions) show a plain
+mouse pointer for a single agent and automatically switch to distinct per-agent
+colors when multiple agents act on the same pane (with target element outlines
+and click ripples; labels are off by default); it is not the desktop pointer.
 Cursors remain visible across background-to-foreground tab switches and tie
-Playwright CDP tokens to the calling agent's color across reconnects.
-Cursor style (`agent_cursor: "cute"`) and idle visibility timeout
-(`agent_cursor_idle_secs`, default `30`, `0` to stay visible) are configurable
-in Settings.
+Playwright CDP tokens to the calling agent across reconnects. Built-in `Rec`
+recordings default to a plain monochrome cursor. Style (`agent_cursor`: `auto`,
+`colored`, `neutral`, `cute`, `off`), labels (`agent_cursor_labels`), element
+highlights (`agent_cursor_highlight`), recording cursor (`agent_cursor_record`),
+and idle timeout (`agent_cursor_idle_secs`, default `30`, `0` to stay visible)
+are configurable in Settings.
 No command moves the desktop pointer, sends desktop keys,
 focuses a native window, or opens Chromium's network debugging port.
 
