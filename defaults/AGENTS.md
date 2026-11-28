@@ -597,8 +597,9 @@ The main ones:
   such tabs go last in their space, in the order made. `focus` is a boolean.
 - Panes: `pane.split {direction: "right" | "down", pane?, argv? | mod?, props?}` (a new
   terminal, or a mod pane), `pane.close {pane?}`,
-  `pane.zoom {pane?}`, `pane.focus {pane | terminal}`, `pane.go {direction}`,
+  `pane.zoom {pane?}`, `pane.equalize {tab?}`, `pane.focus {pane | terminal}`, `pane.go {direction}`,
   `pane.swap {pane?, direction | target}`, `pane.move {pane?, tab?, space?, direction?}`, `focus.cycle {direction?: "next" | "prev" | "pane"}`.
+  `pane.equalize` resets custom split sizes across a tab (default: the active one) so every row and column shares space equally (default `Cmd+Ctrl+=` on macOS).
   `pane.move` moves a pane into another tab on the same machine (`tab` id, splitting `"right"` default or `"down"`), or breaks it out into a new tab (`tab: "new"`, optional `space`).
   `focus.cycle` (default `Ctrl+\`` / `Ctrl+Shift+\``) cycles keyboard focus between the active pane
   and visible focusable areas (`spaces`, `agents`), revealing a hidden sidebar if needed; `direction: "pane"` returns focus to the active pane.

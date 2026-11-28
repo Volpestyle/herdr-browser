@@ -1508,6 +1508,7 @@ fn ctrl_cmd_shortcut(key: &str, shift: bool) -> Option<&'static str> {
     match (key, shift) {
         ("[", false) => Some("tab.move:prev"),
         ("]", false) => Some("tab.move:next"),
+        ("=", false) => Some("pane.equalize"),
         ("b", false) => Some("browser.split:right"),
         _ => None,
     }
@@ -2274,6 +2275,11 @@ mod tests {
         assert_eq!(ctrl_shortcut("~", true), Some("focus.cycle:prev"));
         assert_eq!(ctrl_cmd_shortcut("[", false), Some("tab.move:prev"));
         assert_eq!(ctrl_cmd_shortcut("]", false), Some("tab.move:next"));
+        assert_eq!(ctrl_cmd_shortcut("=", false), Some("pane.equalize"));
+        assert_eq!(
+            ctrl_cmd_shortcut("=", false),
+            keys["global"]["cmd-ctrl-="].as_str()
+        );
         assert_eq!(ctrl_cmd_shortcut("b", false), Some("browser.split:right"));
         assert_eq!(keys["global"]["cmd-ctrl-["]["command"].as_str(), Some("tab.move"));
         assert_eq!(keys["global"]["cmd-ctrl-["]["args"]["by"].as_i64(), Some(-1));

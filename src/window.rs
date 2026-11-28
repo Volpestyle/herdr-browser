@@ -3101,8 +3101,8 @@ impl AppWindow {
             if !args.is_object() { args = json!({}); }
             args["machine"] = json!(machine);
         }
-        if matches!(name, "space.new" | "space.close" | "space.rename" | "space.move" | "tab.new" | "tab.close" | "tab.rename" | "tab.move" | "pane.split" | "pane.close" | "pane.swap" | "pane.move" | "terminal.keep" | "terminal.park") {
-            let node = ["id", "space", "pane"].into_iter().find_map(|k| Self::arg(&args, k));
+        if matches!(name, "space.new" | "space.close" | "space.rename" | "space.move" | "tab.new" | "tab.close" | "tab.rename" | "tab.move" | "pane.split" | "pane.close" | "pane.swap" | "pane.move" | "pane.equalize" | "terminal.keep" | "terminal.park") {
+            let node = ["id", "space", "pane", "tab"].into_iter().find_map(|k| Self::arg(&args, k));
             let target = node.and_then(|id| self.model.space(id).or_else(|| self.model.space_of(id))).or_else(|| self.model.active_space());
             let machine = if name == "space.new" { Self::arg(&args, "machine") }
                 else if name == "terminal.park" { Self::arg(&args, "terminal").and_then(|a| a.split_once('/').map(|(m, _)| m)) }
@@ -3381,6 +3381,17 @@ impl AppWindow {
             "pane.zoom" => {
                 if let Some(pane) = Self::owned(a, "pane").or_else(|| self.model.focused_pane()) {
                     self.model.toggle_zoom(&pane);
+                }
+            }
+            "pane.equalize" => {
+                let Some(id) = Self::owned(a, "tab").or(active_ctx) else {
+                    if Self::arg(a, "tab").is_some() {
+                        return self.fail("no tab to equalize");
+                    }
+                    return;
+                };
+                if !self.model.equalize_tab(&id) {
+                    return self.fail(format!("no tab {id:?}"));
                 }
             }
             "pane.focus" => {

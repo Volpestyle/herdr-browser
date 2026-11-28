@@ -37,9 +37,9 @@ CHROME_STABLE_FEED = 'https://versionhistory.googleapis.com/v1/chrome/platforms/
 CHROME_RELEASES_FEED = 'https://chromereleases.googleblog.com/feeds/posts/default/-/Stable%20updates?alt=json&max-results=150'
 UPDATE_COMMAND = 'herdr-browser-update check --force'
 LABEL = 'dev.james.herdr-browser-updater'
-FEATURE_PATHS = ['Cargo.toml', 'src/main.rs', 'src/model.rs', 'src/window.rs', 'src/window/pane_drag.rs', 'src/commands.rs', 'src/mods.rs', 'src/mods/render_tests.rs',
+FEATURE_PATHS = ['Cargo.toml', 'src/main.rs', 'src/model.rs', 'src/window.rs', 'src/window/pane_drag.rs', 'src/commands.rs', 'src/macos.rs', 'src/mods.rs', 'src/mods/render_tests.rs',
                  'src/browser.rs', 'src/browser', 'src/control.rs', 'src/terminal.rs', 'src/vt.rs', 'src/hc.rs', 'src/SKILL.md', 'defaults/AGENTS.md',
-                 'defaults/mods/new-menu', 'defaults/mods/native-browser', 'defaults/mods/files', 'defaults/mods/pane', 'defaults/mods/spaces', 'defaults/mods/agents', 'defaults/mods/picker', 'defaults/mods/tabs', 'defaults/mods/menu', 'defaults/frame/settings',
+                 'defaults/mods/new-menu', 'defaults/mods/native-browser', 'defaults/mods/files', 'defaults/mods/pane', 'defaults/mods/spaces', 'defaults/mods/agents', 'defaults/mods/picker', 'defaults/mods/tabs', 'defaults/mods/menu', 'defaults/frame/palette', 'defaults/frame/settings',
                  'defaults/keys.macos.json',
                  'licenses/CEF.txt', 'licenses/marked.txt', 'licenses/inventory.json']
 # Stock CEF has no H.264/AAC. This archive is the framework rebuilt on James's

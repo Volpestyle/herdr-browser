@@ -107,6 +107,7 @@ pub(crate) fn menus(layouts: &[String], shown: Option<&str>) -> Vec<Menu> {
             MenuItem::submenu(Menu::new("Layout").items(layout_items)),
             command("Toggle Sidebar", "layout.toggle:sidebar"),
             command("Zoom Pane", "pane.zoom"),
+            command("Equalize Panes", "pane.equalize"),
             MenuItem::separator(),
             command("Actual Size", "app.zoom_reset"),
             command("Zoom In", "app.zoom_in"),
@@ -192,6 +193,11 @@ mod tests {
         assert_eq!(key("Copy").as_deref(), Some("cmd-c"));
         assert_eq!(key("Toggle Sidebar").as_deref(), Some("cmd-b"));
         assert_eq!(key("Minimize").as_deref(), Some("cmd-m"));
+        let (_, equalize) = items.iter().find(|(t, _)| t == "Equalize Panes").unwrap();
+        assert_eq!(
+            keymap.bindings_for_action(equalize.as_ref()).next().unwrap().keystrokes()[0],
+            gpui::KeyBinding::new("cmd-ctrl-=", gpui::NoAction, None).keystrokes()[0]
+        );
     }
 
     #[test]

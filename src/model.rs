@@ -658,6 +658,14 @@ impl Model {
         true
     }
 
+    /// Resets custom pane and split sizes throughout a tab so every row and
+    /// column shares space equally among its children.
+    pub fn equalize_tab(&mut self, tab_id: &str) -> bool {
+        let Some(c) = self.tab_mut(tab_id) else { return false };
+        equalize_children(&mut c.root);
+        true
+    }
+
     /// Focuses a pane anywhere: selects its space and tab.
     pub fn focus_pane(&mut self, pane_id: &str) -> bool {
         let Some(c) = self.tab_of_mut(pane_id) else { return false };
@@ -1362,5 +1370,40 @@ mod tests {
         let Some(Content::Mod { props, .. }) = pane.content() else { panic!("expected mod pane") };
         assert_eq!(props["url"], "https://linear.app/");
         assert_eq!(props["profile"], "person");
+    }
+
+    #[test]
+    fn equalizing_a_tab_resets_nested_split_sizes_and_leaves_other_tabs_alone() {
+        use crate::layout::Size;
+        let mut m = three_panes_and_another_tab();
+        assert!(m.split("x3", Axis::Column, "x5", "t5"));
+        let c1 = m.tab_mut("c1").unwrap();
+        c1.root.find_mut("x1").unwrap().size = Some(Size::Weight { weight: 0.7 });
+        c1.root.find_mut("x2").unwrap().size = Some(Size::Px { px: 240.0 });
+        c1.root.find_mut("x3").unwrap().size = Some(Size::Weight { weight: 0.2 });
+        c1.root.find_mut("x5").unwrap().size = Some(Size::Weight { weight: 0.8 });
+        let nested_col = c1.root.parent_of("x3").unwrap().id.clone();
+        c1.root.find_mut(&nested_col).unwrap().size = Some(Size::Weight { weight: 0.3 });
+
+        m.tab_mut("c2").unwrap().root.find_mut("x4").unwrap().size = Some(Size::Px { px: 300.0 });
+
+        assert!(m.equalize_tab("c1"));
+        assert!(!m.equalize_tab("missing"));
+
+        let c1 = m.tab("c1").unwrap();
+        for id in ["x1", "x2", "x3", "x5", nested_col.as_str()] {
+            assert_eq!(c1.root.find(id).unwrap().size, None, "{id} should have equal weight");
+        }
+        assert_eq!(m.tab("c2").unwrap().root.find("x4").unwrap().size, Some(Size::Px { px: 300.0 }));
+        assert_eq!(m.focused_pane().as_deref(), Some("x5"));
+    }
+}
+
+fn equalize_children(node: &mut Node) {
+    if let Some(children) = node.children_mut() {
+        for child in children {
+            child.size = None;
+            equalize_children(child);
+        }
     }
 }

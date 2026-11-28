@@ -85,6 +85,9 @@ the same tab. Give `direction` or `target`, not both. Focus stays with the same 
 herdr-app do pane.swap '{"pane":"p12","target":"p14"}'
 ```
 
+`pane.equalize {tab?}` resets custom split sizes throughout a tab (default: the
+active tab) so panes share each row and column equally (`Cmd+Ctrl+=` on macOS).
+
 `terminal.select_all {terminal?}` selects a terminal's whole screen and scrollback,
 ready for `terminal.copy`. Without a target it follows keyboard focus. In vim and
 other alternate-screen apps, it selects only that screen. Cmd+A runs it on macOS;
