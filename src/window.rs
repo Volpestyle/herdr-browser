@@ -4373,7 +4373,7 @@ impl AppWindow {
                     {
                         let pane = value["pane"].as_str().or(target_pane.as_deref());
                         if let Some(view) = pane.and_then(|p| self.copies.get(p)).and_then(|c| c.browser.as_ref()) {
-                            view.read(cx).note_agent_activity(cursor_caller.as_deref(), cursor_label.as_deref());
+                            view.read(cx).clear_agent_cursors();
                         }
                     }
                     if matches!(name.as_str(), "browser.open" | "browser.split" | "browser.markdown") {

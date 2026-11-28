@@ -64,7 +64,7 @@ pub struct PointerUpdate<'a> {
     pub caller: Option<&'a str>,
     /// Short human-readable label rendered in the colored pill next to the cursor.
     pub label: Option<&'a str>,
-    /// Optional CSS viewport position; `None` keeps the agent's last position (or a default parked spot).
+    /// Optional CSS viewport position; `None` keeps an already-active cursor at its last real position without spawning a parked cursor.
     pub pos: Option<(f64, f64)>,
     /// Optional CSS viewport bounding box `[x, y, width, height]` of the targeted element to outline.
     pub rect: Option<[f64; 4]>,
@@ -809,13 +809,11 @@ impl Browser {
         }
     }
 
-    pub fn note_agent_activity(&self, caller: Option<&str>, label: Option<&str>) {
+    pub fn clear_agent_cursors(&self) {
         #[cfg(target_os = "macos")]
         if let Some(host) = &self.host {
-            host.note_agent_activity(caller, label);
+            host.clear_agent_cursors();
         }
-        #[cfg(not(target_os = "macos"))]
-        let _ = (caller, label);
     }
 
     /// Hand AppKit's keyboard back to the window if this page holds it, so a

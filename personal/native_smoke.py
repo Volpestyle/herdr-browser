@@ -114,8 +114,22 @@ def main():
         assert [t['name'] for t in wm_tools.get('tools', [])] == ['echo'], wm_tools
         wm_call = command('browser.tool', pane=pane, name='echo', input={'msg': 'hello-webmcp'})
         assert wm_call.get('result') == {'echoed': 'hello-webmcp', 'nav': True}, wm_call
+        # Read-only commands and non-DOM evals must not spawn a parked cursor.
+        eval_read = command('browser.eval', pane=pane, js='document.title')
+        assert eval_read.get('result') == 'one.html / JavaScript ready', eval_read
+        cursors_after_read = inspected().get('native', {}).get('agent_cursors', {})
+        assert cursors_after_read.get('count') == 0, cursors_after_read
+        # A DOM click inside browser.eval must move the cursor to the real element.
+        eval_click = command('browser.eval', pane=pane, js='const b = document.querySelector("button"); b.click(); b.textContent')
+        assert eval_click.get('result') == 'Clicked', eval_click
+        cursors_after_click = inspected().get('native', {}).get('agent_cursors', {})
+        assert cursors_after_click.get('count') == 1 and cursors_after_click.get('clicks', 0) >= 1 and cursors_after_click.get('highlights', 0) >= 1, cursors_after_click
+        clicked_agent = cursors_after_click['agents'][0]
+        assert clicked_agent['x'] is not None and clicked_agent['x'] < bounds[2] - 160, (clicked_agent, bounds)
         command('browser.navigate', pane=pane, url=url + '/two.html')
         until(lambda: inspected().get('title') == 'two.html / JavaScript ready', 'second page')
+        cursors_after_nav = inspected().get('native', {}).get('agent_cursors', {})
+        assert all(a.get('x') is None and a.get('y') is None for a in cursors_after_nav.get('agents', [])), cursors_after_nav
         command('browser.back', pane=pane)
         until(lambda: inspected().get('title') == 'one.html / JavaScript ready', 'back navigation')
         command('browser.forward', pane=pane)

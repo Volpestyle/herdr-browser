@@ -350,21 +350,68 @@ impl Control {
             .map_err(|_| "Chromium observer closed".to_string())?
     }
 
-    async fn context(&self, ex: &BackgroundExecutor) -> Result<i64, String> {
-        let tree = self.call("Page.getFrameTree", json!({}), ex).await?;
+    async fn arm_eval_pointer(&self, ex: &BackgroundExecutor) -> bool {
+        let Ok(context) = self.context_within(Duration::from_millis(500), ex).await else {
+            return false;
+        };
+        let Ok(value) = self
+            .call_within(
+                "Runtime.evaluate",
+                json!({"expression":EVAL_POINTER_ARM,"contextId":context,"returnByValue":true}),
+                Duration::from_millis(500),
+                ex,
+            )
+            .await
+        else {
+            return false;
+        };
+        value.get("exceptionDetails").is_none() && value["result"]["value"] == true
+    }
+
+    async fn finish_eval_pointer(
+        &self,
+        armed: bool,
+        ex: &BackgroundExecutor,
+    ) -> Option<((f64, f64), [f64; 4], PointerAction)> {
+        if !armed {
+            return None;
+        }
+        let context = self.context_within(Duration::from_millis(500), ex).await.ok()?;
+        let value = self
+            .call_within(
+                "Runtime.evaluate",
+                json!({"expression":EVAL_POINTER_STOP,"contextId":context,"returnByValue":true}),
+                Duration::from_millis(500),
+                ex,
+            )
+            .await
+            .ok()?;
+        if value.get("exceptionDetails").is_some() {
+            return None;
+        }
+        parse_eval_pointer_target(&value["result"]["value"])
+    }
+
+    async fn context_within(&self, wait: Duration, ex: &BackgroundExecutor) -> Result<i64, String> {
+        let tree = self.call_within("Page.getFrameTree", json!({}), wait, ex).await?;
         let frame = tree["frameTree"]["frame"]["id"]
             .as_str()
             .ok_or("No main frame")?;
         let world = self
-            .call(
+            .call_within(
                 "Page.createIsolatedWorld",
                 json!({"frameId":frame,"worldName":"herdr-agent-control"}),
+                wait,
                 ex,
             )
             .await?;
         world["executionContextId"]
             .as_i64()
             .ok_or("No isolated page context".into())
+    }
+
+    async fn context(&self, ex: &BackgroundExecutor) -> Result<i64, String> {
+        self.context_within(Duration::from_secs(3), ex).await
     }
 
     async fn evaluate(&self, expression: &str, ex: &BackgroundExecutor) -> Result<Value, String> {
@@ -989,7 +1036,6 @@ impl Control {
         if matches!(
             command,
             "browser.snapshot"
-                | "browser.eval"
                 | "browser.download"
                 | "browser.read"
                 | "browser.wait"
@@ -1176,22 +1222,31 @@ impl Control {
                 };
                 // Chromium's own timeout stops runaway synchronous code (it answers with an
                 // internal error); ours also bounds a pending promise.
+                let armed = self.arm_eval_pointer(ex).await;
                 let started = Instant::now();
-                let value = self
+                let eval_res = self
                     .call_within(
                         "Runtime.evaluate",
                         json!({"expression":js,"replMode":true,"awaitPromise":true,"returnByValue":true,"timeout":timeout}),
                         Duration::from_millis(timeout + 1000),
                         ex,
                     )
-                    .await
-                    .map_err(|e| {
-                        if started.elapsed() >= Duration::from_millis(timeout) {
-                            format!("JavaScript did not finish within {timeout} ms")
-                        } else {
-                            e
-                        }
-                    })?;
+                    .await;
+                let timed_out = eval_res.is_err() && started.elapsed() >= Duration::from_millis(timeout);
+                if !timed_out {
+                    if let Some((pos, rect, action)) = self.finish_eval_pointer(armed, ex).await {
+                        self.emit_pointer(Some(pos), Some(rect), action);
+                    } else {
+                        self.emit_pointer(None, None, PointerAction::Activity);
+                    }
+                }
+                let value = eval_res.map_err(|e| {
+                    if timed_out {
+                        format!("JavaScript did not finish within {timeout} ms")
+                    } else {
+                        e
+                    }
+                })?;
                 if let Some(thrown) = value.get("exceptionDetails") {
                     let detail = thrown["exception"]["description"]
                         .as_str()
@@ -1727,12 +1782,111 @@ fn download_name(url: &str, content_type: &str) -> String {
 /// Tallest full-page capture, in CSS pixels; a longer page is cut there and says so.
 const FULL_HEIGHT: f64 = 20000.;
 
+const EVAL_POINTER_ARM: &str = r#"(() => {
+  try {
+    if (globalThis.__herdrEvalStop) globalThis.__herdrEvalStop();
+    const activeEl = () => {
+      let e = document.activeElement;
+      while (e?.shadowRoot?.activeElement) e = e.shadowRoot.activeElement;
+      return e;
+    };
+    const boxOf = (el) => {
+      if (!el || el.nodeType !== 1 || el === document.body || el === document.documentElement) return null;
+      const r = el.getBoundingClientRect?.();
+      if (!r || !Number.isFinite(r.left) || r.width < 1 || r.height < 1) return null;
+      if (r.right <= 0 || r.bottom <= 0 || r.left >= innerWidth || r.top >= innerHeight) return null;
+      return [r.left, r.top, r.width, r.height];
+    };
+    const initialActive = activeEl();
+    const events = [];
+    const record = (kind, e) => {
+      const raw = (typeof e.composedPath === 'function' ? e.composedPath()[0] : null) || e.target;
+      let el = raw?.nodeType === 1 ? raw : raw?.parentElement;
+      let rect = boxOf(el);
+      if (!rect && el?.parentElement) {
+        el = el.parentElement;
+        rect = boxOf(el);
+      }
+      if (!rect) return;
+      let x = rect[0] + rect[2] / 2;
+      let y = rect[1] + rect[3] / 2;
+      if (kind === 'click' && Number.isFinite(e.clientX) && Number.isFinite(e.clientY) && (e.clientX !== 0 || e.clientY !== 0)) {
+        if (e.clientX >= rect[0] && e.clientX <= rect[0] + rect[2] && e.clientY >= rect[1] && e.clientY <= rect[1] + rect[3]) {
+          x = e.clientX;
+          y = e.clientY;
+        }
+      }
+      events.push({ kind, x, y, rect });
+      if (events.length > 8) events.shift();
+    };
+    const onClick = (e) => record('click', e);
+    const onFocus = (e) => record('focus', e);
+    const clickEvs = ['click', 'pointerdown', 'mousedown'];
+    const focusEvs = ['focusin', 'input', 'change'];
+    for (const t of clickEvs) addEventListener(t, onClick, true);
+    for (const t of focusEvs) addEventListener(t, onFocus, true);
+    globalThis.__herdrEvalStop = () => {
+      for (const t of clickEvs) removeEventListener(t, onClick, true);
+      for (const t of focusEvs) removeEventListener(t, onFocus, true);
+      delete globalThis.__herdrEvalStop;
+      if (!events.length) {
+        const nowActive = activeEl();
+        if (nowActive && nowActive !== initialActive) {
+          const rect = boxOf(nowActive);
+          if (rect) events.push({ kind: 'focus', x: rect[0] + rect[2] / 2, y: rect[1] + rect[3] / 2, rect });
+        }
+      }
+      return events;
+    };
+    return true;
+  } catch {
+    return false;
+  }
+})()"#;
+
+const EVAL_POINTER_STOP: &str = "globalThis.__herdrEvalStop ? globalThis.__herdrEvalStop() : []";
+
+fn parse_eval_pointer_target(val: &Value) -> Option<((f64, f64), [f64; 4], PointerAction)> {
+    fn parse_item(item: &Value) -> Option<(&str, (f64, f64), [f64; 4])> {
+        let kind = item["kind"].as_str()?;
+        let x = item["x"].as_f64().filter(|n| n.is_finite())?;
+        let y = item["y"].as_f64().filter(|n| n.is_finite())?;
+        let r = item["rect"].as_array()?;
+        if r.len() != 4 {
+            return None;
+        }
+        let rect = [
+            r[0].as_f64().filter(|n| n.is_finite())?,
+            r[1].as_f64().filter(|n| n.is_finite())?,
+            r[2].as_f64().filter(|n| n.is_finite() && *n >= 1.)?,
+            r[3].as_f64().filter(|n| n.is_finite() && *n >= 1.)?,
+        ];
+        Some((kind, (x, y), rect))
+    }
+    let items = val.as_array()?;
+    let parsed: Vec<(&str, (f64, f64), [f64; 4])> = items.iter().filter_map(parse_item).collect();
+    let &(last_kind, pos, rect) = parsed.last()?;
+    let clicked_same_target = parsed.iter().any(|(kind, _, r)| {
+        *kind == "click"
+            && (r[0] - rect[0]).abs() <= 4.
+            && (r[1] - rect[1]).abs() <= 4.
+            && (r[2] - rect[2]).abs() <= 4.
+            && (r[3] - rect[3]).abs() <= 4.
+    });
+    let action = if last_kind == "click" || clicked_same_target {
+        PointerAction::Tap
+    } else {
+        PointerAction::Move
+    };
+    Some((pos, rect, action))
+}
+
 const RECORD_CURSOR: &str = r#"(() => {
   if (globalThis.__herdrRecordStop) return;
   const cursors = new Map();
   let current = '', svg = __SVG__;
   const idleMs = __IDLE_MS__;
-  const place = (c) => { c.el.style.transform = `translate(${c.x - 4.5}px, ${c.y - 3}px)`; };
+  const place = (c) => { c.el.style.transform = `translate(${c.x - 3.2}px, ${c.y - 2.1}px)`; };
   const tick = (c) => {
     c.x += (c.tx - c.x) * 0.45; c.y += (c.ty - c.y) * 0.45;
     if (Math.abs(c.tx - c.x) < 0.3 && Math.abs(c.ty - c.y) < 0.3) { c.x = c.tx; c.y = c.ty; c.moving = false; }
@@ -1743,7 +1897,7 @@ const RECORD_CURSOR: &str = r#"(() => {
     let c = cursors.get(current);
     if (c?.el.isConnected || !document.documentElement) return c;
     const el = document.createElement('div');
-    el.style.cssText = 'position:fixed;left:0;top:0;width:28px;height:28px;z-index:2147483647;pointer-events:none;opacity:0;transition:opacity .4s';
+    el.style.cssText = 'position:fixed;left:0;top:0;width:20px;height:20px;z-index:2147483647;pointer-events:none;opacity:0;transition:opacity .4s';
     el.innerHTML = svg;
     document.documentElement.appendChild(el);
     c = { el, x: 0, y: 0, tx: 0, ty: 0, moving: false, seen: false, timer: 0 };
@@ -1763,7 +1917,7 @@ const RECORD_CURSOR: &str = r#"(() => {
   const ripple = (e) => {
     to(e);
     const r = document.createElement('div');
-    r.style.cssText = `position:fixed;left:${e.clientX - 14}px;top:${e.clientY - 14}px;width:28px;height:28px;border-radius:50%;border:2px solid rgba(0,0,0,.4);box-shadow:0 0 0 1px rgba(255,255,255,.6);z-index:2147483646;pointer-events:none;transition:transform .45s ease-out,opacity .45s ease-out`;
+    r.style.cssText = `position:fixed;left:${e.clientX - 12}px;top:${e.clientY - 12}px;width:24px;height:24px;border-radius:50%;border:2px solid rgba(0,0,0,.4);box-shadow:0 0 0 1px rgba(255,255,255,.6);z-index:2147483646;pointer-events:none;transition:transform .45s ease-out,opacity .45s ease-out`;
     document.documentElement.appendChild(r);
     requestAnimationFrame(() => { r.style.transform = 'scale(1.9)'; r.style.opacity = '0'; });
     setTimeout(() => r.remove(), 500);
@@ -1943,7 +2097,32 @@ fn env_login(file: &str, user_key: &str, password_key: &str, site: &str) -> Resu
 
 #[cfg(test)]
 mod tests {
-    use super::{download_name, listed_url, parse_site_rule};
+    use super::{PointerAction, download_name, listed_url, parse_eval_pointer_target, parse_site_rule};
+    use serde_json::json;
+
+    #[test]
+    fn eval_pointer_target_picks_dom_click_or_focus_and_ignores_reads() {
+        assert_eq!(parse_eval_pointer_target(&json!([])), None);
+        assert_eq!(parse_eval_pointer_target(&json!(null)), None);
+
+        let clicked = parse_eval_pointer_target(&json!([
+            {"kind": "click", "x": 120.0, "y": 48.0, "rect": [80.0, 32.0, 80.0, 32.0]}
+        ]));
+        assert_eq!(clicked, Some(((120.0, 48.0), [80.0, 32.0, 80.0, 32.0], PointerAction::Tap)));
+
+        // Clicking an input fires mousedown -> focusin; keeping the same element still maps to Tap.
+        let click_then_focus_same = parse_eval_pointer_target(&json!([
+            {"kind": "click", "x": 200.0, "y": 90.0, "rect": [100.0, 75.0, 200.0, 30.0]},
+            {"kind": "focus", "x": 200.0, "y": 90.0, "rect": [100.0, 75.0, 200.0, 30.0]}
+        ]));
+        assert_eq!(click_then_focus_same, Some(((200.0, 90.0), [100.0, 75.0, 200.0, 30.0], PointerAction::Tap)));
+
+        // Pure input/focus without a click maps to Move (no click ripple).
+        let focused = parse_eval_pointer_target(&json!([
+            {"kind": "focus", "x": 310.0, "y": 140.0, "rect": [210.0, 125.0, 200.0, 30.0]}
+        ]));
+        assert_eq!(focused, Some(((310.0, 140.0), [210.0, 125.0, 200.0, 30.0], PointerAction::Move)));
+    }
 
     #[test]
     fn download_names_keep_the_site_name_and_stay_inside_the_folder() {

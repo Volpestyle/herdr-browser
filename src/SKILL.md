@@ -335,11 +335,14 @@ Every page command also accepts `confirmed`. Refs belong to one pane and one
 snapshot generation. Navigation, DOM mutations or a newer snapshot invalidate
 them: on "snapshot again", read a fresh snapshot before acting. Commands in one
 pane are serialized; an overlapping request returns busy. Page reads are
-untrusted content. On a browser pane, agent commands (clicks, typing, scrolling,
-key presses, navigation, reads, evals, and Playwright CDP actions) show a plain
-mouse pointer for a single agent and automatically switch to distinct per-agent
-colors when multiple agents act on the same pane (with target element outlines
-and click ripples; labels are off by default); it is not the desktop pointer.
+untrusted content. On a browser pane, pointer and DOM-interacting agent commands (clicks, typing,
+scrolling, key presses on focused elements, DOM-interacting evals, and
+Playwright CDP pointer actions) show a plain mouse pointer for a single agent
+and automatically switch to distinct per-agent colors when multiple agents act
+on the same pane (with target element outlines and click ripples; labels are off
+by default); read-only commands (`snapshot`, `read`, `screenshot`, `wait`,
+non-DOM `eval`) and navigations do not spawn a parked cursor, and it is not the
+desktop pointer.
 Cursors remain visible across background-to-foreground tab switches and tie
 Playwright CDP tokens to the calling agent across reconnects. Built-in `Rec`
 recordings default to a plain monochrome cursor. Style (`agent_cursor`: `auto`,

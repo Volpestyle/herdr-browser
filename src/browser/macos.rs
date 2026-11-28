@@ -675,7 +675,6 @@ struct CursorLayers {
 struct CursorSlot {
     layers: Option<CursorLayers>,
     color: &'static str,
-    slot_index: usize,
     label: String,
     moves: u64,
     clicks: u64,
@@ -720,9 +719,13 @@ pub struct Host {
     focus_gate: Arc<AtomicBool>,
     monitor: Option<Retained<AnyObject>>,
 }
-const AGENT_CURSOR: &[u8] = br##"<svg xmlns="http://www.w3.org/2000/svg" width="28" height="28" viewBox="0 0 28 28"><path d="M4 3.2 L4 21 Q4 23.2 5.9 21.7 L9.9 18.6 L12.9 24.5 Q13.7 26 15.2 25.3 L16.6 24.6 Q18 23.9 17.3 22.5 L14.4 16.9 L19.4 16.6 Q21.6 16.4 20 14.9 L6 2.2 Q4 0.9 4 3.2 Z" fill="#111111" stroke="#fff" stroke-width="1.8" stroke-linejoin="round"/></svg>"##;
-const CUTE_AGENT_CURSOR: &[u8] = br##"<svg xmlns="http://www.w3.org/2000/svg" width="28" height="28" viewBox="0 0 28 28"><defs><linearGradient id="g" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#B69CFF"/><stop offset="1" stop-color="#7C5CFF"/></linearGradient></defs><path d="M4 3.2 L4 21 Q4 23.2 5.9 21.7 L9.9 18.6 L12.9 24.5 Q13.7 26 15.2 25.3 L16.6 24.6 Q18 23.9 17.3 22.5 L14.4 16.9 L19.4 16.6 Q21.6 16.4 20 14.9 L6 2.2 Q4 0.9 4 3.2 Z" fill="url(#g)" stroke="#fff" stroke-width="1.8" stroke-linejoin="round"/><circle cx="8" cy="11.6" r="1.25" fill="#2A1B5E"/><circle cx="11.5" cy="11.6" r="1.25" fill="#2A1B5E"/><circle cx="8.4" cy="11.1" r=".45" fill="#fff"/><circle cx="11.9" cy="11.1" r=".45" fill="#fff"/><ellipse cx="6.8" cy="14" rx="1.1" ry=".6" fill="#FF8FB8" opacity=".75"/><ellipse cx="12.8" cy="14" rx="1.1" ry=".6" fill="#FF8FB8" opacity=".75"/><path d="M8.9 13.5 Q9.75 14.5 10.6 13.5" fill="none" stroke="#2A1B5E" stroke-width=".8" stroke-linecap="round"/></svg>"##;
+const AGENT_CURSOR: &[u8] = br##"<svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 28 28"><path d="M4 3.2 L4 21 Q4 23.2 5.9 21.7 L9.9 18.6 L12.9 24.5 Q13.7 26 15.2 25.3 L16.6 24.6 Q18 23.9 17.3 22.5 L14.4 16.9 L19.4 16.6 Q21.6 16.4 20 14.9 L6 2.2 Q4 0.9 4 3.2 Z" fill="#111111" stroke="#fff" stroke-width="1.8" stroke-linejoin="round"/></svg>"##;
+const CUTE_AGENT_CURSOR: &[u8] = br##"<svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 28 28"><defs><linearGradient id="g" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#B69CFF"/><stop offset="1" stop-color="#7C5CFF"/></linearGradient></defs><path d="M4 3.2 L4 21 Q4 23.2 5.9 21.7 L9.9 18.6 L12.9 24.5 Q13.7 26 15.2 25.3 L16.6 24.6 Q18 23.9 17.3 22.5 L14.4 16.9 L19.4 16.6 Q21.6 16.4 20 14.9 L6 2.2 Q4 0.9 4 3.2 Z" fill="url(#g)" stroke="#fff" stroke-width="1.8" stroke-linejoin="round"/><circle cx="8" cy="11.6" r="1.25" fill="#2A1B5E"/><circle cx="11.5" cy="11.6" r="1.25" fill="#2A1B5E"/><circle cx="8.4" cy="11.1" r=".45" fill="#fff"/><circle cx="11.9" cy="11.1" r=".45" fill="#fff"/><ellipse cx="6.8" cy="14" rx="1.1" ry=".6" fill="#FF8FB8" opacity=".75"/><ellipse cx="12.8" cy="14" rx="1.1" ry=".6" fill="#FF8FB8" opacity=".75"/><path d="M8.9 13.5 Q9.75 14.5 10.6 13.5" fill="none" stroke="#2A1B5E" stroke-width=".8" stroke-linecap="round"/></svg>"##;
 
+const CURSOR_SIZE: f64 = 20.;
+const CURSOR_HOTSPOT_X: f64 = 4.5 * (CURSOR_SIZE / 28.);
+const CURSOR_HOTSPOT_Y: f64 = 3.0 * (CURSOR_SIZE / 28.);
+const RIPPLE_SIZE: f64 = 26.;
 const NEUTRAL_CURSOR_COLOR: &str = "#111111";
 const DEFAULT_AGENT_CURSOR_IDLE_SECS: f64 = 30.;
 const MAX_AGENT_CURSOR_IDLE_SECS: f64 = 3600.;
@@ -937,7 +940,7 @@ fn cursor_svg_for_color(color: &str, cute: bool) -> Vec<u8> {
 
 fn ripple_svg_for_color(color: &str) -> Vec<u8> {
     format!(
-        r##"<svg xmlns="http://www.w3.org/2000/svg" width="32" height="32" viewBox="0 0 32 32"><circle cx="16" cy="16" r="12" fill="none" stroke="#fff" stroke-opacity=".85" stroke-width="3.6"/><circle cx="16" cy="16" r="12" fill="none" stroke="{color}" stroke-opacity=".95" stroke-width="2"/></svg>"##
+        r##"<svg xmlns="http://www.w3.org/2000/svg" width="26" height="26" viewBox="0 0 32 32"><circle cx="16" cy="16" r="12" fill="none" stroke="#fff" stroke-opacity=".85" stroke-width="3.6"/><circle cx="16" cy="16" r="12" fill="none" stroke="{color}" stroke-opacity=".95" stroke-width="2"/></svg>"##
     )
     .into_bytes()
 }
@@ -973,16 +976,22 @@ fn agent_highlight_svg(color: &str, width: f64, height: f64) -> (Vec<u8>, f64, f
     (svg.into_bytes(), w, h)
 }
 
-fn default_parked_position(bounds_w: f64, bounds_h: f64, slot_index: usize) -> (f64, f64) {
-    let row = (slot_index % 4) as f64;
-    let x = (bounds_w - 140.0 - row * 24.0).clamp(48.0, (bounds_w - 48.0).max(48.0));
-    let y = (44.0 + row * 30.0).clamp(32.0, (bounds_h - 48.0).max(32.0));
-    (x, y)
+fn resolve_pointer_position(
+    incoming: Option<(f64, f64)>,
+    last: Option<(f64, f64)>,
+    bounds_w: f64,
+    bounds_h: f64,
+) -> Option<(f64, f64)> {
+    let (x, y) = incoming.or(last)?;
+    if !x.is_finite() || !y.is_finite() {
+        return None;
+    }
+    Some((x.clamp(0., bounds_w), y.clamp(0., bounds_h)))
 }
 
 fn badge_origin(x: f64, y: f64, badge_w: f64, badge_h: f64, bounds_w: f64, bounds_h: f64) -> (f64, f64) {
-    let mut bx = x + 16.0;
-    let mut by = y + 20.0;
+    let mut bx = x + 13.0;
+    let mut by = y + 16.0;
     if bx + badge_w + 8.0 > bounds_w {
         bx = (x - badge_w - 8.0).max(8.0);
     }
@@ -1104,7 +1113,7 @@ unsafe fn ensure_slot_layers(
     let _: () = msg_send![&*highlight, setOpacity: 0_f32];
     let _: () = msg_send![root, addSublayer: &*highlight];
 
-    let ripple_size = NSSize::new(32., 32.);
+    let ripple_size = NSSize::new(RIPPLE_SIZE, RIPPLE_SIZE);
     let ripple: Retained<AnyObject> = msg_send![class!(CALayer), layer];
     let _: () = msg_send![&*ripple, setBounds: NSRect::new(NSPoint::new(0., 0.), ripple_size)];
     let _: () = msg_send![&*ripple, setAnchorPoint: NSPoint::new(0.5, 0.5)];
@@ -1113,11 +1122,10 @@ unsafe fn ensure_slot_layers(
     let _: () = msg_send![&*ripple, setOpacity: 0_f32];
     let _: () = msg_send![root, addSublayer: &*ripple];
 
-    let size = NSSize::new(28., 28.);
-    let hot = NSPoint::new(4.5, 3.);
+    let size = NSSize::new(CURSOR_SIZE, CURSOR_SIZE);
     let cursor: Retained<AnyObject> = msg_send![class!(CALayer), layer];
     let _: () = msg_send![&*cursor, setBounds: NSRect::new(NSPoint::new(0., 0.), size)];
-    let _: () = msg_send![&*cursor, setAnchorPoint: NSPoint::new(hot.x / size.width, 1. - hot.y / size.height)];
+    let _: () = msg_send![&*cursor, setAnchorPoint: NSPoint::new(CURSOR_HOTSPOT_X / size.width, 1. - CURSOR_HOTSPOT_Y / size.height)];
     unsafe { set_layer_svg(&cursor, &cursor_svg_for_color(render_color, cute), size, scale) };
     let _: () = msg_send![&*cursor, setZPosition: 1e6_f64];
     let _: () = msg_send![&*cursor, setOpacity: 0_f32];
@@ -1156,11 +1164,11 @@ unsafe fn ensure_slot_layers(
 unsafe fn sync_slot_appearance(layers: &mut CursorLayers, label: &str, render_color: &'static str, cute: bool, scale: f64) {
     let color_changed = layers.rendered_color != render_color;
     if color_changed || layers.cute != cute {
-        unsafe { set_layer_svg(&layers.cursor, &cursor_svg_for_color(render_color, cute), NSSize::new(28., 28.), scale) };
+        unsafe { set_layer_svg(&layers.cursor, &cursor_svg_for_color(render_color, cute), NSSize::new(CURSOR_SIZE, CURSOR_SIZE), scale) };
         layers.cute = cute;
     }
     if color_changed {
-        unsafe { set_layer_svg(&layers.ripple, &ripple_svg_for_color(render_color), NSSize::new(32., 32.), scale) };
+        unsafe { set_layer_svg(&layers.ripple, &ripple_svg_for_color(render_color), NSSize::new(RIPPLE_SIZE, RIPPLE_SIZE), scale) };
     }
     if color_changed || layers.badge_label != label {
         let (badge_svg, bw, bh) = agent_badge_svg(render_color, label);
@@ -1175,12 +1183,13 @@ unsafe fn sync_slot_appearance(layers: &mut CursorLayers, label: &str, render_co
 }
 
 fn active_slot_count(slots: &HashMap<String, CursorSlot>, now: Instant, idle_secs: f64) -> usize {
-    if idle_secs == 0. {
-        return slots.len();
-    }
     slots
         .values()
-        .filter(|s| now.saturating_duration_since(s.last_seen).as_secs_f64() < idle_secs)
+        .filter(|s| {
+            s.last_x.is_some()
+                && s.last_y.is_some()
+                && (idle_secs == 0. || now.saturating_duration_since(s.last_seen).as_secs_f64() < idle_secs)
+        })
         .count()
 }
 
@@ -1215,15 +1224,27 @@ fn move_pointer(
     let rect = valid_rect(update.rect);
     let key = normalized_caller_key(update.caller).to_owned();
     let label = normalize_cursor_label(update.caller, update.label);
-    let (slot_index, color) = agent_slot_and_color(Some(&key));
+    let color = agent_color(Some(&key));
     let now_instant = Instant::now();
     let prefs = cursor_prefs();
 
     let mut slots = slots.borrow_mut();
+    // Coordinate-less activity (read, snapshot, non-DOM eval) only keeps an already-visible
+    // cursor warm at its last real target; it never spawns a parked cursor or resurrects an
+    // expired one.
+    if pos.is_none() {
+        let can_refresh = slots.get(&key).is_some_and(|s| {
+            s.last_x.is_some()
+                && s.last_y.is_some()
+                && (prefs.idle_secs == 0. || now_instant.saturating_duration_since(s.last_seen).as_secs_f64() < prefs.idle_secs)
+        });
+        if !can_refresh {
+            return false;
+        }
+    }
     let slot = slots.entry(key.clone()).or_insert_with(|| CursorSlot {
         layers: None,
         color,
-        slot_index,
         label: label.clone(),
         moves: 0,
         clicks: 0,
@@ -1293,14 +1314,8 @@ fn move_pointer(
     let Some((render_color, cute)) = resolve_cursor_appearance(prefs.style, slot.color, active_agents) else {
         return false;
     };
-    let (x, y) = match (slot.last_x, slot.last_y) {
-        (Some(lx), Some(ly)) => (lx.clamp(0., bounds.width), ly.clamp(0., bounds.height)),
-        _ => {
-            let (dx, dy) = default_parked_position(bounds.width, bounds.height, slot.slot_index);
-            slot.last_x = Some(dx);
-            slot.last_y = Some(dy);
-            (dx, dy)
-        }
+    let Some((x, y)) = resolve_pointer_position(None, slot.last_x.zip(slot.last_y), bounds.width, bounds.height) else {
+        return false;
     };
 
     let position = NSPoint::new(x, bounds.height - y);
@@ -1427,14 +1442,8 @@ fn sync_visible_cursors(container: &NSView, slots: &RefCell<HashMap<String, Curs
             } else {
                 (prefs.idle_secs - elapsed).max(0.5)
             };
-            let (x, y) = match (slot.last_x, slot.last_y) {
-                (Some(lx), Some(ly)) => (lx.clamp(0., bounds.width), ly.clamp(0., bounds.height)),
-                _ => {
-                    let (dx, dy) = default_parked_position(bounds.width, bounds.height, slot.slot_index);
-                    slot.last_x = Some(dx);
-                    slot.last_y = Some(dy);
-                    (dx, dy)
-                }
+            let Some((x, y)) = resolve_pointer_position(None, slot.last_x.zip(slot.last_y), bounds.width, bounds.height) else {
+                continue;
             };
             if ensure_slot_layers(container, slot, render_color, cute, scale).is_none() {
                 continue;
@@ -1841,18 +1850,21 @@ impl Host {
         *self.control.borrow_mut() = Some(control.clone());
         Ok(control)
     }
-    pub fn note_agent_activity(&self, caller: Option<&str>, label: Option<&str>) {
-        move_pointer(
-            &self.container,
-            &self.layers,
-            PointerUpdate {
-                caller,
-                label,
-                pos: None,
-                rect: None,
-                action: PointerAction::Activity,
-            },
-        );
+    pub fn clear_agent_cursors(&self) {
+        let mut slots = self.layers.borrow_mut();
+        for slot in slots.values_mut() {
+            slot.last_x = None;
+            slot.last_y = None;
+            slot.last_rect = None;
+            slot.last_rect_at = None;
+            if let Some(layers) = &slot.layers {
+                unsafe {
+                    hide_layer(&layers.cursor);
+                    hide_layer(&layers.badge);
+                    hide_layer(&layers.highlight);
+                }
+            }
+        }
     }
     fn native_view(&self) -> Option<&NSView> {
         let browser = self.browser.borrow();
@@ -2071,12 +2083,12 @@ impl Drop for Host {
 #[cfg(test)]
 mod tests {
     use super::{
-        AGENT_COLORS, CursorPrefs, CursorStyle, DEFAULT_AGENT_CURSOR_IDLE_SECS,
-        MAX_AGENT_CURSOR_IDLE_SECS, NEUTRAL_CURSOR_COLOR, agent_badge_svg, agent_color,
-        agent_highlight_svg, agent_ripple_svg, badge_origin, ctrl_cmd_shortcut, ctrl_shortcut,
-        download_url, local_toast_cutouts, normalize_cursor_label, parse_cursor_prefs,
-        point_in_cutouts, record_cursor_svg_for_prefs, resolve_cursor_appearance, shortcut,
-        subframe_url,
+        AGENT_COLORS, AGENT_CURSOR, CUTE_AGENT_CURSOR, CURSOR_SIZE, CursorPrefs, CursorStyle,
+        DEFAULT_AGENT_CURSOR_IDLE_SECS, MAX_AGENT_CURSOR_IDLE_SECS, NEUTRAL_CURSOR_COLOR,
+        agent_badge_svg, agent_color, agent_highlight_svg, agent_ripple_svg, badge_origin,
+        ctrl_cmd_shortcut, ctrl_shortcut, download_url, local_toast_cutouts,
+        normalize_cursor_label, parse_cursor_prefs, point_in_cutouts, record_cursor_svg_for_prefs,
+        resolve_cursor_appearance, resolve_pointer_position, shortcut, subframe_url,
     };
     #[test]
     fn local_toast_cutouts_punches_only_intersecting_toast_rects() {
@@ -2191,10 +2203,21 @@ mod tests {
     }
     #[test]
     fn badge_origin_flips_inside_viewport_edges() {
-        assert_eq!(badge_origin(100.0, 100.0, 80.0, 20.0, 800.0, 600.0), (116.0, 120.0));
+        assert_eq!(badge_origin(100.0, 100.0, 80.0, 20.0, 800.0, 600.0), (113.0, 116.0));
         // Near right & bottom edges, flips left and up so the label never clips.
         let (bx, by) = badge_origin(760.0, 580.0, 80.0, 20.0, 800.0, 600.0);
         assert!(bx + 80.0 <= 800.0 && by + 20.0 <= 600.0, "({bx}, {by})");
+    }
+    #[test]
+    fn pointer_position_never_invents_parked_coords_and_uses_native_cursor_scale() {
+        assert_eq!(resolve_pointer_position(None, None, 1200.0, 800.0), None);
+        assert_eq!(resolve_pointer_position(Some((250.0, 180.0)), None, 1200.0, 800.0), Some((250.0, 180.0)));
+        assert_eq!(resolve_pointer_position(None, Some((250.0, 180.0)), 1200.0, 800.0), Some((250.0, 180.0)));
+        assert_eq!(resolve_pointer_position(Some((1500.0, -10.0)), None, 1200.0, 800.0), Some((1200.0, 0.0)));
+        assert_eq!(resolve_pointer_position(Some((f64::NAN, 10.0)), Some((50.0, 50.0)), 1200.0, 800.0), None);
+        assert_eq!(CURSOR_SIZE, 20.0);
+        assert!(String::from_utf8_lossy(AGENT_CURSOR).contains(r#"width="20" height="20""#));
+        assert!(String::from_utf8_lossy(CUTE_AGENT_CURSOR).contains(r#"width="20" height="20""#));
     }
     #[test]
     fn download_url_allows_web_and_web_origin_blob_urls_only() {
