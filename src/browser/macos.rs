@@ -681,6 +681,9 @@ struct CursorSlot {
     highlights: u64,
     last_x: Option<f64>,
     last_y: Option<f64>,
+    scroll_dx: f64,
+    scroll_dy: f64,
+    anchor_gen: u64,
     last_rect: Option<[f64; 4]>,
     last_rect_at: Option<Instant>,
     last_seen: Instant,
@@ -688,11 +691,498 @@ struct CursorSlot {
 
 type CursorSlots = Rc<RefCell<HashMap<String, CursorSlot>>>;
 
+const CURSOR_SCROLL_BINDING: &str = "__herdrCursorScroll";
+const CURSOR_SCROLL_WORLD: &str = "herdr-cursor-scroll";
+// Disjoint from Control's 1.. request IDs on the shared CEF DevTools channel.
+const CURSOR_SCROLL_ID_BASE: i32 = 1_000_000_000;
+
+const CURSOR_SCROLL_TRACKER_JS: &str = r#"(() => {
+  if (!globalThis.__herdrCursorScrollInstalled) {
+    globalThis.__herdrCursorScrollInstalled = true;
+    const anchors = new Map();
+    globalThis.__herdrCursorAnchors = anchors;
+    const capture = (x, y) => {
+      const chain = [];
+      let fixed = false;
+      let e = document.elementFromPoint(x, y);
+      while (e && e !== document.documentElement && e !== document.body) {
+        const style = getComputedStyle(e);
+        const isFixed = style.position === 'fixed';
+        if (/auto|scroll|overlay/.test(style.overflowX + style.overflowY)) {
+          chain.push({ el: e, left: e.scrollLeft, top: e.scrollTop });
+        }
+        if (isFixed) {
+          fixed = true;
+          break;
+        }
+        e = e.parentElement || e.getRootNode?.()?.host || null;
+      }
+      if (!fixed) {
+        chain.push({ root: true, left: window.scrollX, top: window.scrollY });
+      }
+      return chain;
+    };
+    const emit = () => {
+      const updates = [];
+      for (const [key, a] of anchors) {
+        if (a.pending) {
+          clearTimeout(a.timer);
+          a.timer = setTimeout(() => {
+            if (anchors.get(key) !== a) return;
+            a.pending = false;
+            a.chain = capture(a.x, a.y);
+            a.dx = 0;
+            a.dy = 0;
+          }, 180);
+          continue;
+        }
+        let dx = 0, dy = 0;
+        for (const item of a.chain) {
+          if (item.root) {
+            dx += window.scrollX - item.left;
+            dy += window.scrollY - item.top;
+          } else if (item.el.isConnected) {
+            dx += item.el.scrollLeft - item.left;
+            dy += item.el.scrollTop - item.top;
+          }
+        }
+        if (Math.abs(dx - a.dx) > 0.25 || Math.abs(dy - a.dy) > 0.25) {
+          a.dx = dx;
+          a.dy = dy;
+          updates.push([key, a.gen, dx, dy]);
+        }
+      }
+      if (updates.length && typeof globalThis.__herdrCursorScroll === 'function') {
+        globalThis.__herdrCursorScroll(JSON.stringify(updates));
+      }
+    };
+    window.addEventListener('scroll', emit, { capture: true, passive: true });
+    globalThis.__herdrCursorAnchor = (key, gen, x, y, waitForScroll) => {
+      const prev = anchors.get(key);
+      if (prev?.timer) clearTimeout(prev.timer);
+      if (waitForScroll) {
+        const entry = { gen, x, y, pending: true, chain: [], dx: 0, dy: 0, timer: 0 };
+        entry.timer = setTimeout(() => {
+          if (anchors.get(key) !== entry) return;
+          entry.pending = false;
+          entry.chain = capture(x, y);
+        }, 350);
+        anchors.set(key, entry);
+      } else {
+        anchors.set(key, { gen, x, y, pending: false, chain: capture(x, y), dx: 0, dy: 0, timer: 0 });
+      }
+    };
+    globalThis.__herdrCursorClear = () => {
+      for (const a of anchors.values()) {
+        if (a.timer) clearTimeout(a.timer);
+      }
+      anchors.clear();
+    };
+  }
+  __CALL__
+})()"#;
+
+#[derive(Clone, Debug)]
+struct PendingAnchor {
+    key: String,
+    generation: u64,
+    x: f64,
+    y: f64,
+    wait_for_scroll: bool,
+}
+
+struct ScrollTrackerState {
+    host: Option<BrowserHost>,
+    _registration: Option<Registration>,
+    next_id: i32,
+    bootstrapped: bool,
+    frame_req_id: Option<i32>,
+    world_req_id: Option<i32>,
+    world_context_id: Option<i64>,
+    inflight_evals: HashMap<i32, Vec<PendingAnchor>>,
+    pending_anchors: Vec<PendingAnchor>,
+    retrying: bool,
+}
+
+struct ScrollTracker {
+    browser: runtime::BrowserCell,
+    container: ObjcWeak<NSView>,
+    slots: std::rc::Weak<RefCell<HashMap<String, CursorSlot>>>,
+    state: Rc<RefCell<ScrollTrackerState>>,
+}
+
+wrap_dev_tools_message_observer! {
+    struct ScrollObserver {
+        state: std::rc::Weak<RefCell<ScrollTrackerState>>,
+        container: ObjcWeak<NSView>,
+        slots: std::rc::Weak<RefCell<HashMap<String, CursorSlot>>>,
+    }
+    impl DevToolsMessageObserver {
+        fn on_dev_tools_method_result(&self, _browser: Option<&mut Browser>, id: i32, success: i32, result: Option<&[u8]>) {
+            let Some(state_rc) = self.state.upgrade() else { return };
+            let mut state = state_rc.borrow_mut();
+            if state.frame_req_id == Some(id) {
+                state.frame_req_id = None;
+                if success != 0
+                    && let Some(frame_id) = result
+                        .and_then(|b| serde_json::from_slice::<Value>(b).ok())
+                        .and_then(|v| v["frameTree"]["frame"]["id"].as_str().map(str::to_owned))
+                {
+                    let req = send_scroll_cdp(
+                        &mut state,
+                        "Page.createIsolatedWorld",
+                        json!({"frameId": frame_id, "worldName": CURSOR_SCROLL_WORLD}),
+                    );
+                    state.world_req_id = req;
+                }
+                return;
+            }
+            if state.world_req_id == Some(id) {
+                state.world_req_id = None;
+                if success != 0
+                    && let Some(ctx) = result
+                        .and_then(|b| serde_json::from_slice::<Value>(b).ok())
+                        .and_then(|v| v["executionContextId"].as_i64())
+                {
+                    state.world_context_id = Some(ctx);
+                    state.retrying = false;
+                    flush_pending_anchors(&mut state);
+                }
+                return;
+            }
+            if let Some(sent) = state.inflight_evals.remove(&id) {
+                let failed = success == 0
+                    || result
+                        .and_then(|b| serde_json::from_slice::<Value>(b).ok())
+                        .is_some_and(|v| v.get("exceptionDetails").is_some());
+                if failed && !state.retrying {
+                    state.world_context_id = None;
+                    state.retrying = true;
+                    for anchor in sent {
+                        upsert_pending_anchor(&mut state.pending_anchors, anchor);
+                    }
+                    ensure_scroll_world(&mut state);
+                }
+            }
+        }
+        fn on_dev_tools_event(&self, _browser: Option<&mut Browser>, method: Option<&CefString>, params: Option<&[u8]>) {
+            let Some(method) = method.map(|m| m.to_string()) else { return };
+            match method.as_str() {
+                "Runtime.executionContextsCleared" => {
+                    if let Some(state_rc) = self.state.upgrade() {
+                        let mut state = state_rc.borrow_mut();
+                        state.world_context_id = None;
+                        state.inflight_evals.clear();
+                    }
+                }
+                "Runtime.executionContextDestroyed" => {
+                    if let (Some(state_rc), Some(bytes)) = (self.state.upgrade(), params)
+                        && let Ok(v) = serde_json::from_slice::<Value>(bytes)
+                        && let Some(destroyed) = v["executionContextId"].as_i64()
+                    {
+                        let mut state = state_rc.borrow_mut();
+                        if state.world_context_id == Some(destroyed) {
+                            state.world_context_id = None;
+                        }
+                    }
+                }
+                "Runtime.bindingCalled" => {
+                    let Some(bytes) = params else { return };
+                    let Ok(v) = serde_json::from_slice::<Value>(bytes) else { return };
+                    if v["name"].as_str() != Some(CURSOR_SCROLL_BINDING) {
+                        return;
+                    }
+                    let Some(payload) = v["payload"].as_str() else { return };
+                    let updates = parse_scroll_updates(payload);
+                    if updates.is_empty() {
+                        return;
+                    }
+                    let (Some(container), Some(slots)) = (self.container.load(), self.slots.upgrade()) else {
+                        return;
+                    };
+                    apply_scroll_updates(&container, &slots, &updates);
+                }
+                _ => {}
+            }
+        }
+        fn on_dev_tools_agent_detached(&self, _browser: Option<&mut Browser>) {
+            if let Some(state_rc) = self.state.upgrade() {
+                let mut state = state_rc.borrow_mut();
+                state.host = None;
+                state._registration = None;
+                state.bootstrapped = false;
+                state.frame_req_id = None;
+                state.world_req_id = None;
+                state.world_context_id = None;
+                state.inflight_evals.clear();
+                state.pending_anchors.clear();
+                state.retrying = false;
+            }
+        }
+    }
+}
+
+fn send_scroll_cdp(state: &mut ScrollTrackerState, method: &str, params: Value) -> Option<i32> {
+    let host = state.host.as_ref()?;
+    let id = state.next_id;
+    state.next_id = state.next_id.checked_add(1).unwrap_or(CURSOR_SCROLL_ID_BASE);
+    let message = serde_json::to_vec(&json!({"id": id, "method": method, "params": params})).ok()?;
+    if host.send_dev_tools_message(Some(&message)) == 0 {
+        return None;
+    }
+    Some(id)
+}
+
+fn upsert_pending_anchor(pending: &mut Vec<PendingAnchor>, anchor: PendingAnchor) {
+    if let Some(existing) = pending.iter_mut().find(|a| a.key == anchor.key) {
+        if anchor.generation >= existing.generation {
+            *existing = anchor;
+        }
+    } else {
+        pending.push(anchor);
+    }
+}
+
+fn ensure_scroll_world(state: &mut ScrollTrackerState) {
+    if state.world_context_id.is_some() || state.frame_req_id.is_some() || state.world_req_id.is_some() {
+        return;
+    }
+    state.frame_req_id = send_scroll_cdp(state, "Page.getFrameTree", json!({}));
+}
+
+fn flush_pending_anchors(state: &mut ScrollTrackerState) {
+    let Some(ctx) = state.world_context_id else {
+        ensure_scroll_world(state);
+        return;
+    };
+    if state.pending_anchors.is_empty() {
+        return;
+    }
+    let batch = std::mem::take(&mut state.pending_anchors);
+    let mut calls = String::new();
+    for a in &batch {
+        let key_json = serde_json::to_string(&a.key).unwrap_or_else(|_| "\"\"".into());
+        calls.push_str(&format!(
+            "globalThis.__herdrCursorAnchor({key_json}, {}, {}, {}, {});\n",
+            a.generation, a.x, a.y, a.wait_for_scroll
+        ));
+    }
+    let expression = CURSOR_SCROLL_TRACKER_JS.replace("__CALL__", &calls);
+    if let Some(req_id) = send_scroll_cdp(
+        state,
+        "Runtime.evaluate",
+        json!({"contextId": ctx, "expression": expression, "returnByValue": false}),
+    ) {
+        state.inflight_evals.insert(req_id, batch);
+    }
+}
+
+impl ScrollTracker {
+    fn new(browser: runtime::BrowserCell, container: ObjcWeak<NSView>, slots: CursorSlots) -> Rc<Self> {
+        Rc::new(Self {
+            browser,
+            container,
+            slots: Rc::downgrade(&slots),
+            state: Rc::new(RefCell::new(ScrollTrackerState {
+                host: None,
+                _registration: None,
+                next_id: CURSOR_SCROLL_ID_BASE,
+                bootstrapped: false,
+                frame_req_id: None,
+                world_req_id: None,
+                world_context_id: None,
+                inflight_evals: HashMap::new(),
+                pending_anchors: Vec::new(),
+                retrying: false,
+            })),
+        })
+    }
+
+    fn ensure_attached(&self) -> bool {
+        let mut state = self.state.borrow_mut();
+        if state._registration.is_some() {
+            return true;
+        }
+        let Some(host) = self.browser.borrow().as_ref().and_then(|b| b.host()) else {
+            return false;
+        };
+        let mut observer = ScrollObserver::new(
+            Rc::downgrade(&self.state),
+            self.container.clone(),
+            self.slots.clone(),
+        );
+        let Some(registration) = host.add_dev_tools_message_observer(Some(&mut observer)) else {
+            return false;
+        };
+        state.host = Some(host);
+        state._registration = Some(registration);
+        if !state.bootstrapped {
+            let _ = send_scroll_cdp(&mut state, "Runtime.enable", json!({}));
+            let _ = send_scroll_cdp(
+                &mut state,
+                "Runtime.addBinding",
+                json!({"name": CURSOR_SCROLL_BINDING, "executionContextName": CURSOR_SCROLL_WORLD}),
+            );
+            state.bootstrapped = true;
+        }
+        true
+    }
+
+    fn anchor(&self, key: &str, generation: u64, x: f64, y: f64, wait_for_scroll: bool) {
+        if !x.is_finite() || !y.is_finite() || !self.ensure_attached() {
+            return;
+        }
+        let mut state = self.state.borrow_mut();
+        state.retrying = false;
+        upsert_pending_anchor(
+            &mut state.pending_anchors,
+            PendingAnchor {
+                key: key.to_owned(),
+                generation,
+                x,
+                y,
+                wait_for_scroll,
+            },
+        );
+        flush_pending_anchors(&mut state);
+    }
+
+    fn clear(&self) {
+        let mut state = self.state.borrow_mut();
+        state.pending_anchors.clear();
+        state.inflight_evals.clear();
+        if let Some(ctx) = state.world_context_id {
+            let _ = send_scroll_cdp(
+                &mut state,
+                "Runtime.evaluate",
+                json!({"contextId": ctx, "expression": "globalThis.__herdrCursorClear?.()", "returnByValue": false}),
+            );
+        }
+    }
+
+    fn detach(&self) {
+        let mut state = self.state.borrow_mut();
+        state.pending_anchors.clear();
+        state.inflight_evals.clear();
+        state.world_context_id = None;
+        state._registration = None;
+        state.host = None;
+    }
+}
+
+fn parse_scroll_updates(payload: &str) -> Vec<(String, u64, f64, f64)> {
+    let Ok(Value::Array(items)) = serde_json::from_str::<Value>(payload) else {
+        return Vec::new();
+    };
+    items
+        .into_iter()
+        .filter_map(|item| {
+            let arr = item.as_array()?;
+            if arr.len() < 4 {
+                return None;
+            }
+            let key = arr[0].as_str()?.to_owned();
+            let generation = arr[1].as_u64()?;
+            let dx = arr[2].as_f64().filter(|v| v.is_finite())?;
+            let dy = arr[3].as_f64().filter(|v| v.is_finite())?;
+            Some((key, generation, dx, dy))
+        })
+        .collect()
+}
+
+fn scrolled_pointer_position(base: (f64, f64), scroll_dx: f64, scroll_dy: f64) -> (f64, f64) {
+    (base.0 - scroll_dx, base.1 - scroll_dy)
+}
+
+fn scrolled_badge_origin(
+    base_x: f64,
+    base_y: f64,
+    scroll_dx: f64,
+    scroll_dy: f64,
+    badge_w: f64,
+    badge_h: f64,
+    bounds_w: f64,
+    bounds_h: f64,
+) -> (f64, f64) {
+    let (bx, by) = badge_origin(base_x, base_y, badge_w, badge_h, bounds_w, bounds_h);
+    (bx - scroll_dx, by - scroll_dy)
+}
+
+fn apply_scroll_updates(
+    container: &NSView,
+    slots: &RefCell<HashMap<String, CursorSlot>>,
+    updates: &[(String, u64, f64, f64)],
+) {
+    let Some(window) = container.window() else { return };
+    let bounds = container.bounds().size;
+    if bounds.width < 1. || bounds.height < 1. {
+        return;
+    }
+    let visible = !container.isHidden() && window.isVisible();
+    let prefs = cursor_prefs();
+    let mut slots = slots.borrow_mut();
+    let mut moved_any = false;
+    for (key, generation, dx, dy) in updates {
+        let Some(slot) = slots.get_mut(key) else { continue };
+        if slot.anchor_gen != *generation {
+            continue;
+        }
+        slot.scroll_dx = *dx;
+        slot.scroll_dy = *dy;
+        if !visible || prefs.style == CursorStyle::Off {
+            continue;
+        }
+        let Some((base_x, base_y)) =
+            resolve_pointer_position(None, slot.last_x.zip(slot.last_y), bounds.width, bounds.height)
+        else {
+            continue;
+        };
+        let Some(layers) = slot.layers.as_ref() else { continue };
+        let (x, y) = scrolled_pointer_position((base_x, base_y), slot.scroll_dx, slot.scroll_dy);
+        let position = NSPoint::new(x, bounds.height - y);
+        let (bx, by) = scrolled_badge_origin(
+            base_x,
+            base_y,
+            slot.scroll_dx,
+            slot.scroll_dy,
+            layers.badge_w,
+            layers.badge_h,
+            bounds.width,
+            bounds.height,
+        );
+        let badge_pos = NSPoint::new(bx, bounds.height - by);
+        unsafe {
+            if !moved_any {
+                let _: () = msg_send![class!(CATransaction), begin];
+                let _: () = msg_send![class!(CATransaction), setDisableActions: true];
+                moved_any = true;
+            }
+            let _: () = msg_send![&*layers.cursor, setPosition: position];
+            let _: () = msg_send![&*layers.badge, setPosition: badge_pos];
+            if prefs.highlight
+                && let Some(r) = slot.last_rect
+            {
+                let hpos = NSPoint::new(
+                    r[0] - slot.scroll_dx - 3.0,
+                    bounds.height - (r[1] - slot.scroll_dy - 3.0),
+                );
+                let _: () = msg_send![&*layers.highlight, setPosition: hpos];
+            }
+        }
+    }
+    if moved_any {
+        unsafe {
+            let _: () = msg_send![class!(CATransaction), commit];
+        }
+    }
+}
+
 struct TargetHost {
     id: u64,
     target_id: Rc<RefCell<Option<String>>>,
     container: ObjcWeak<NSView>,
     layers: CursorSlots,
+    scroll_tracker: Rc<ScrollTracker>,
 }
 
 static NEXT_HOST_ID: AtomicU64 = AtomicU64::new(1);
@@ -702,6 +1192,7 @@ pub struct Host {
     browser: runtime::BrowserCell,
     control: RefCell<Option<Rc<super::control::Control>>>,
     layers: CursorSlots,
+    scroll_tracker: Rc<ScrollTracker>,
     target_id: Rc<RefCell<Option<String>>>,
     target_page: Rc<Cell<bool>>,
     closing: Rc<Cell<bool>>,
@@ -1106,6 +1597,7 @@ unsafe fn ensure_slot_layers(
     if root.is_null() {
         return None;
     }
+    let _: () = msg_send![root, setMasksToBounds: true];
 
     let highlight: Retained<AnyObject> = msg_send![class!(CALayer), layer];
     let _: () = msg_send![&*highlight, setAnchorPoint: NSPoint::new(0.0, 1.0)];
@@ -1199,12 +1691,12 @@ pub(super) fn move_pointer_for_target(target_id: &str, update: PointerUpdate<'_>
             .borrow()
             .iter()
             .find(|h| h.target_id.borrow().as_deref() == Some(target_id))
-            .and_then(|h| Some((h.container.load()?, h.layers.clone())))
+            .and_then(|h| Some((h.container.load()?, h.layers.clone(), h.scroll_tracker.clone())))
     });
-    let Some((container, layers)) = matched else {
+    let Some((container, layers, scroll_tracker)) = matched else {
         return false;
     };
-    move_pointer(&container, &layers, update)
+    move_pointer(&container, &layers, Some(&scroll_tracker), update)
 }
 
 fn valid_rect(rect: Option<[f64; 4]>) -> Option<[f64; 4]> {
@@ -1214,6 +1706,7 @@ fn valid_rect(rect: Option<[f64; 4]>) -> Option<[f64; 4]> {
 fn move_pointer(
     container: &NSView,
     slots: &RefCell<HashMap<String, CursorSlot>>,
+    scroll_tracker: Option<&ScrollTracker>,
     update: PointerUpdate<'_>,
 ) -> bool {
     let pos = match update.pos {
@@ -1251,6 +1744,9 @@ fn move_pointer(
         highlights: 0,
         last_x: None,
         last_y: None,
+        scroll_dx: 0.,
+        scroll_dy: 0.,
+        anchor_gen: 0,
         last_rect: None,
         last_rect_at: None,
         last_seen: now_instant,
@@ -1258,9 +1754,14 @@ fn move_pointer(
     slot.label = label;
     slot.last_seen = now_instant;
     slot.moves += 1;
+    let mut anchored = None;
     if let Some((x, y)) = pos {
         slot.last_x = Some(x);
         slot.last_y = Some(y);
+        slot.scroll_dx = 0.;
+        slot.scroll_dy = 0.;
+        slot.anchor_gen = slot.anchor_gen.wrapping_add(1);
+        anchored = Some((slot.anchor_gen, x, y));
     }
     if let Some(r) = rect {
         slot.last_rect = Some(r);
@@ -1287,6 +1788,10 @@ fn move_pointer(
     let Some(window) = container.window() else { return false };
     let bounds = container.bounds().size;
     if container.isHidden() || !window.isVisible() || bounds.width < 1. || bounds.height < 1. {
+        drop(slots);
+        if let (Some(tracker), Some((anchor_gen, ax, ay))) = (scroll_tracker, anchored) {
+            tracker.anchor(&key, anchor_gen, ax, ay, matches!(update.action, PointerAction::Scroll));
+        }
         return false;
     }
 
@@ -1314,9 +1819,11 @@ fn move_pointer(
     let Some((render_color, cute)) = resolve_cursor_appearance(prefs.style, slot.color, active_agents) else {
         return false;
     };
-    let Some((x, y)) = resolve_pointer_position(None, slot.last_x.zip(slot.last_y), bounds.width, bounds.height) else {
+    let Some((base_x, base_y)) = resolve_pointer_position(None, slot.last_x.zip(slot.last_y), bounds.width, bounds.height) else {
         return false;
     };
+    let (scroll_dx, scroll_dy) = (slot.scroll_dx, slot.scroll_dy);
+    let (x, y) = scrolled_pointer_position((base_x, base_y), scroll_dx, scroll_dy);
 
     let position = NSPoint::new(x, bounds.height - y);
     unsafe {
@@ -1326,7 +1833,7 @@ fn move_pointer(
         let label = slot.label.clone();
         let layers = slot.layers.as_mut().expect("cursor layers");
         sync_slot_appearance(layers, &label, render_color, cute, scale);
-        let (bx, by) = badge_origin(x, y, layers.badge_w, layers.badge_h, bounds.width, bounds.height);
+        let (bx, by) = scrolled_badge_origin(base_x, base_y, scroll_dx, scroll_dy, layers.badge_w, layers.badge_h, bounds.width, bounds.height);
         let badge_pos = NSPoint::new(bx, bounds.height - by);
         let glide = match update.action {
             PointerAction::Click => 0.3_f64,
@@ -1401,6 +1908,10 @@ fn move_pointer(
             hide_layer(&layers.badge);
         }
     }
+    drop(slots);
+    if let (Some(tracker), Some((anchor_gen, ax, ay))) = (scroll_tracker, anchored) {
+        tracker.anchor(&key, anchor_gen, ax, ay, matches!(update.action, PointerAction::Scroll));
+    }
     true
 }
 
@@ -1442,9 +1953,11 @@ fn sync_visible_cursors(container: &NSView, slots: &RefCell<HashMap<String, Curs
             } else {
                 (prefs.idle_secs - elapsed).max(0.5)
             };
-            let Some((x, y)) = resolve_pointer_position(None, slot.last_x.zip(slot.last_y), bounds.width, bounds.height) else {
+            let Some((base_x, base_y)) = resolve_pointer_position(None, slot.last_x.zip(slot.last_y), bounds.width, bounds.height) else {
                 continue;
             };
+            let (scroll_dx, scroll_dy) = (slot.scroll_dx, slot.scroll_dy);
+            let (x, y) = scrolled_pointer_position((base_x, base_y), scroll_dx, scroll_dy);
             if ensure_slot_layers(container, slot, render_color, cute, scale).is_none() {
                 continue;
             }
@@ -1454,7 +1967,7 @@ fn sync_visible_cursors(container: &NSView, slots: &RefCell<HashMap<String, Curs
             let layers = slot.layers.as_mut().expect("cursor layers");
             sync_slot_appearance(layers, &label, render_color, cute, scale);
             let position = NSPoint::new(x, bounds.height - y);
-            let (bx, by) = badge_origin(x, y, layers.badge_w, layers.badge_h, bounds.width, bounds.height);
+            let (bx, by) = scrolled_badge_origin(base_x, base_y, scroll_dx, scroll_dy, layers.badge_w, layers.badge_h, bounds.width, bounds.height);
             let badge_pos = NSPoint::new(bx, bounds.height - by);
             let _: () = msg_send![class!(CATransaction), begin];
             let _: () = msg_send![class!(CATransaction), setDisableActions: true];
@@ -1472,7 +1985,8 @@ fn sync_visible_cursors(container: &NSView, slots: &RefCell<HashMap<String, Curs
                     let rect_age = now_instant.saturating_duration_since(at).as_secs_f64();
                     if rect_age < HIGHLIGHT_HOLD_SECS + 0.5 {
                         let hold = (HIGHLIGHT_HOLD_SECS - rect_age).max(0.3);
-                        show_highlight(&layers.highlight, render_color, r, bounds.height, scale, media_now, hold);
+                        let shifted = [r[0] - scroll_dx, r[1] - scroll_dy, r[2], r[3]];
+                        show_highlight(&layers.highlight, render_color, shifted, bounds.height, scale, media_now, hold);
                     }
                 }
             } else {
@@ -1782,6 +2296,11 @@ impl Host {
         };
         let id = NEXT_HOST_ID.fetch_add(1, Ordering::Relaxed);
         let layers = Rc::new(RefCell::new(HashMap::new()));
+        let scroll_tracker = ScrollTracker::new(
+            browser.clone(),
+            ObjcWeak::from_retained(&container),
+            layers.clone(),
+        );
         let target_id = Rc::new(RefCell::new(None));
         let target_page = Rc::new(Cell::new(false));
         TARGET_HOSTS.with(|hosts| {
@@ -1790,6 +2309,7 @@ impl Host {
                 target_id: target_id.clone(),
                 container: ObjcWeak::from_retained(&container),
                 layers: layers.clone(),
+                scroll_tracker: scroll_tracker.clone(),
             });
         });
         Ok(Self {
@@ -1797,6 +2317,7 @@ impl Host {
             browser,
             control: RefCell::new(None),
             layers,
+            scroll_tracker,
             target_id,
             target_page,
             closing,
@@ -1834,11 +2355,12 @@ impl Host {
         let browser = self.browser.borrow();
         let container = self.container.clone();
         let layers = self.layers.clone();
+        let scroll_tracker = self.scroll_tracker.clone();
         let target_id = self.target_id.clone();
         let target_page = self.target_page.clone();
         let control = Rc::new(super::control::Control::new(
             browser.as_ref().ok_or("Browser is closed")?,
-            Box::new(move |update| move_pointer(&container, &layers, update)),
+            Box::new(move |update| move_pointer(&container, &layers, Some(&scroll_tracker), update)),
             record_cursor,
             cursor_idle_ms,
             Box::new(move |id, is_page| {
@@ -1852,10 +2374,14 @@ impl Host {
         Ok(control)
     }
     pub fn clear_agent_cursors(&self) {
+        self.scroll_tracker.clear();
         let mut slots = self.layers.borrow_mut();
         for slot in slots.values_mut() {
             slot.last_x = None;
             slot.last_y = None;
+            slot.scroll_dx = 0.;
+            slot.scroll_dy = 0.;
+            slot.anchor_gen = slot.anchor_gen.wrapping_add(1);
             slot.last_rect = None;
             slot.last_rect_at = None;
             if let Some(layers) = &slot.layers {
@@ -2042,8 +2568,8 @@ impl Host {
                     "label": s.label,
                     "color": s.color,
                     "rendered_color": s.layers.as_ref().map(|l| l.rendered_color),
-                    "x": s.last_x,
-                    "y": s.last_y,
+                    "x": s.last_x.map(|x| x - s.scroll_dx),
+                    "y": s.last_y.map(|y| y - s.scroll_dy),
                     "moves": s.moves,
                     "clicks": s.clicks,
                     "highlights": s.highlights,
@@ -2077,6 +2603,7 @@ impl Drop for Host {
             }
         }
         self.container.setHidden(true);
+        self.scroll_tracker.detach();
         runtime::close(&self.browser);
         self.container.removeFromSuperview();
     }
@@ -2088,8 +2615,9 @@ mod tests {
         DEFAULT_AGENT_CURSOR_IDLE_SECS, MAX_AGENT_CURSOR_IDLE_SECS, NEUTRAL_CURSOR_COLOR,
         agent_badge_svg, agent_color, agent_highlight_svg, agent_ripple_svg, badge_origin,
         ctrl_cmd_shortcut, ctrl_shortcut, download_url, local_toast_cutouts,
-        normalize_cursor_label, parse_cursor_prefs, point_in_cutouts, record_cursor_svg_for_prefs,
-        resolve_cursor_appearance, resolve_pointer_position, shortcut, subframe_url,
+        normalize_cursor_label, parse_cursor_prefs, parse_scroll_updates, point_in_cutouts,
+        record_cursor_svg_for_prefs, resolve_cursor_appearance, resolve_pointer_position,
+        scrolled_badge_origin, scrolled_pointer_position, shortcut, subframe_url,
     };
     #[test]
     fn local_toast_cutouts_punches_only_intersecting_toast_rects() {
@@ -2338,5 +2866,27 @@ mod tests {
         assert_eq!(prompts, 1);
 
         let _ = std::fs::remove_dir_all(&dir);
+    }
+    #[test]
+    fn scroll_updates_shift_anchored_cursors_out_of_view_and_filter_invalid_entries() {
+        let parsed = parse_scroll_updates(
+            r#"[["t1", 3, 12.5, 240.0], ["bad", "nope", 0, 0], ["short", 1], ["t2", 1, -10.0, 0.0]]"#,
+        );
+        assert_eq!(
+            parsed,
+            vec![
+                ("t1".into(), 3, 12.5, 240.0),
+                ("t2".into(), 1, -10.0, 0.0),
+            ]
+        );
+        assert!(parse_scroll_updates("not json").is_empty());
+        // Scrolling down by 240px moves a cursor anchored at y=150 off the top edge (y=-90)
+        // instead of clamping it to the viewport.
+        assert_eq!(scrolled_pointer_position((100.0, 150.0), 12.5, 240.0), (87.5, -90.0));
+        assert_eq!(scrolled_pointer_position((100.0, 150.0), 0.0, 0.0), (100.0, 150.0));
+        // Badge stays at a rigid offset from the cursor as it scrolls off-screen.
+        let unshifted = scrolled_badge_origin(100.0, 150.0, 0.0, 0.0, 80.0, 20.0, 800.0, 600.0);
+        let shifted = scrolled_badge_origin(100.0, 150.0, 12.5, 240.0, 80.0, 20.0, 800.0, 600.0);
+        assert_eq!((unshifted.0 - shifted.0, unshifted.1 - shifted.1), (12.5, 240.0));
     }
 }
